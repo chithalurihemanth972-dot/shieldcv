@@ -70,7 +70,7 @@ class ResultsScreen(Screen):
         with TabbedContent(id="res-tabs"):
             with TabPane("Findings", id="tab-findings"):
                 with Horizontal(id="findings-pane"):
-                    yield FindingsTable()
+                    yield FindingsTable(self.result.get("findings") or [])
                     yield FindingDetail()
             with TabPane("Breakdown", id="tab-breakdown"):
                 with VerticalScroll():
@@ -105,9 +105,13 @@ class ResultsScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one(FindingsTable).load(self.result.get("findings") or [])
-        self.query_one(FindingsTable).focus()
+        self.call_after_refresh(self._focus_table)
         self._build_index()
+
+    def _focus_table(self) -> None:
+        table = self.query(FindingsTable).first(None)
+        if table is not None:
+            table.focus()
 
     # -- data helpers --------------------------------------------------------
     def _class_rows(self) -> List[tuple]:
@@ -153,7 +157,9 @@ class ResultsScreen(Screen):
 
     def _index_ready(self, index: Dict[str, Path]) -> None:
         self._index = index
-        self._show_detail(self.query_one(FindingsTable).current())
+        table = self.query(FindingsTable).first(None)
+        if table is not None:
+            self._show_detail(table.current())
 
     def _assets(self, finding: Optional[Dict[str, Any]]) -> List[Path]:
         if not finding:
@@ -170,7 +176,9 @@ class ResultsScreen(Screen):
         return paths[:3]
 
     def _show_detail(self, finding: Optional[Dict[str, Any]]) -> None:
-        self.query_one(FindingDetail).show(finding, self._assets(finding))
+        detail = self.query(FindingDetail).first(None)
+        if detail is not None and detail.is_mounted:
+            detail.show(finding, self._assets(finding))
 
     def on_findings_table_focused(self, message: FindingsTable.Focused) -> None:
         self._show_detail(message.finding)

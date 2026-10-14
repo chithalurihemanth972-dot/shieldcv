@@ -36,10 +36,16 @@ class FindingsTable(DataTable):
             self.finding = finding
             super().__init__()
 
-    def __init__(self) -> None:
+    def __init__(self, findings: Sequence[Dict[str, Any]] = ()) -> None:
         super().__init__(cursor_type="row", zebra_stripes=True)
+        self._initial = list(findings)
         self._all: List[Dict[str, Any]] = []
         self._rows: List[Dict[str, Any]] = []
+
+    def on_mount(self) -> None:
+        # Load here, not from the screen: inside TabbedContent the screen's
+        # on_mount can run before this table exists.
+        self.load(self._initial)
 
     def load(self, findings: Sequence[Dict[str, Any]]) -> None:
         if not self.columns:
