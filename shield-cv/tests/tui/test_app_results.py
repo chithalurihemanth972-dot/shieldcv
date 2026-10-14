@@ -154,3 +154,19 @@ async def test_image_sits_between_reason_and_evidence(tmp_path):
         screen = await _open(pilot, app, _result(_dataset(tmp_path)))
         ids = [child.id or type(child).__name__ for child in screen.query_one(FindingDetail).children]
         assert ids == ["detail-body", "ImagePreview", "detail-evidence"]
+
+
+@async_test
+async def test_detail_shown_before_mount_is_applied_once_ready(tmp_path):
+    from textual.app import App
+
+    detail = FindingDetail()
+    detail.show({"finding_id": "F1", "severity": "LOW", "reason": "early bird"}, [])
+
+    class Host(App):
+        def compose(self):
+            yield detail
+
+    async with Host().run_test() as pilot:
+        await wait_for(pilot, lambda: "early bird" in detail.text)
+        assert "early bird" in str(detail.query_one("#detail-body").render())

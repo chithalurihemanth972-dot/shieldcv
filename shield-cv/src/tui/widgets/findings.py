@@ -83,13 +83,27 @@ class FindingDetail(VerticalScroll):
     def __init__(self) -> None:
         super().__init__()
         self.text = ""
+        self._pending: Optional[tuple] = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="detail-body")
         yield ImagePreview()
         yield Static("", id="detail-evidence")
 
+    def on_mount(self) -> None:
+        if self._pending is not None:
+            finding, assets = self._pending
+            self._pending = None
+            self.show(finding, assets)
+
     def show(self, finding: Optional[Dict[str, Any]], assets: Sequence[Path]) -> None:
+        if not self.query("#detail-body"):
+            # Called before our children exist (the table can announce its first
+            # row first): keep the latest request and apply it on mount.
+            self._pending = (finding, list(assets))
+            self.text = "\n".join([str((finding or {}).get("finding_id", "")),
+                                   str((finding or {}).get("reason", ""))])
+            return
         body = self.query_one("#detail-body", Static)
         evidence_view = self.query_one("#detail-evidence", Static)
         if finding is None:
