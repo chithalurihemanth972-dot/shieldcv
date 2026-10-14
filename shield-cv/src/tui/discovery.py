@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -21,8 +22,15 @@ RECORD_EXTS = frozenset({".json", ".jsonl"})
 SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv",
                        "site-packages", ".mypy_cache", ".pytest_cache", "wheels"})
 MAX_DIRS_VISITED = 4000
+MAX_LISTINGS = 3000        # every directory listing one discover() call may make
+MAX_CANDIDATES = 200
+MAX_CHILD_PROBES = 64      # children inspected when deciding "is this a dataset?"
+COUNT_DIRS_CAP = 300       # folders walked when counting one dataset's images
 MAX_RECORD_BYTES = 20 * 1024 * 1024
 IMAGE_COUNT_CAP = 20000
+
+# Per-thread listing budget: pickers discover concurrently on worker threads.
+_BUDGET = threading.local()
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,11 @@ def _scan(folder: Path) -> Tuple[List[Path], List[Path]]:
     """
     dirs: List[Path] = []
     files: List[Path] = []
+    left = getattr(_BUDGET, "left", None)
+    if left is not None:
+        if left <= 0:
+            return dirs, files
+        _BUDGET.left = left - 1
     try:
         with os.scandir(folder) as entries:
             for entry in entries:
@@ -98,7 +111,7 @@ def is_dataset(folder: Path, strict: bool = False) -> bool:
         return True
     if any(d.name == "images" and _has_images(d) for d in subdirs):
         return True
-    return not strict and any(_has_images(d) for d in subdirs)
+    return not strict and any(_has_images(d) for d in subdirs[:MAX_CHILD_PROBES])
 
 
 def is_model(path: Path) -> bool:
@@ -155,14 +168,17 @@ def classify(path: Path) -> Optional[str]:
     return None
 
 
-def _count_images(folder: Path) -> int:
-    count = 0
-    for _, dirs, files in os.walk(folder):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-        count += sum(1 for name in files if os.path.splitext(name)[1].lower() in IMAGE_EXTS)
-        if count >= IMAGE_COUNT_CAP:
-            return IMAGE_COUNT_CAP
-    return count
+def _count_images(folder: Path) -> Tuple[int, bool]:
+    """Images under ``folder`` and whether the count stopped early (it is a floor)."""
+    count, pending, walked = 0, [folder], 0
+    while pending:
+        if walked >= COUNT_DIRS_CAP or count >= IMAGE_COUNT_CAP:
+            return count, True
+        dirs, files = _scan(pending.pop())
+        walked += 1
+        count += sum(1 for f in files if f.suffix.lower() in IMAGE_EXTS)
+        pending.extend(dirs)
+    return count, False
 
 
 def _human_size(num: int) -> str:
@@ -178,12 +194,12 @@ def describe(path: Path, kind: str) -> str:
     """Short human detail for a candidate, e.g. ``3 contributors · 573 images``."""
     try:
         if kind == "dataset":
-            images = _count_images(path)
+            images, partial = _count_images(path)
             contributors = sum(1 for d in _subdirs(path) if d.name.lower().startswith("contributor"))
             parts = []
             if contributors:
                 parts.append(f"{contributors} contributor{'s' if contributors != 1 else ''}")
-            parts.append(f"{images}{'+' if images >= IMAGE_COUNT_CAP else ''} images")
+            parts.append(f"{images}{'+' if partial else ''} images")
             return " · ".join(parts)
         if kind == "model":
             return _human_size(path.stat().st_size)
@@ -240,17 +256,25 @@ def discover(kind: str, roots: Optional[Sequence[Path]] = None,
     seen = set()
     found: List[Candidate] = []
     budget = [MAX_DIRS_VISITED]
-    for root in (default_roots() if roots is None else roots):
-        root = Path(root)
-        if not root.is_dir():
-            continue
-        for path in _walk(root, kind, max_depth, budget, is_root=True):
-            key = os.path.normcase(str(path.resolve()))
-            if key in seen:
+    _BUDGET.left = MAX_LISTINGS
+    try:
+        for root in (default_roots() if roots is None else roots):
+            root = Path(root)
+            if not root.is_dir():
                 continue
-            seen.add(key)
-            found.append(Candidate(path=path, kind=kind, label=display_label(path),
-                                   detail=describe(path, kind)))
+            for path in _walk(root, kind, max_depth, budget, is_root=True):
+                key = os.path.normcase(str(path.resolve()))
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append(Candidate(path=path, kind=kind, label=display_label(path),
+                                       detail=describe(path, kind)))
+                if len(found) >= MAX_CANDIDATES:
+                    break
+            if len(found) >= MAX_CANDIDATES:
+                break
+    finally:
+        _BUDGET.left = None
     found.sort(key=lambda c: c.label.lower())
     return found
 

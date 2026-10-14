@@ -121,3 +121,38 @@ def test_same_file_name_in_two_contributors_resolves_by_contributor(tmp_path: Pa
     assert resolve_asset("IMG_0001.jpg", index, root, contributor="contributor_a") == a
     assert resolve_asset("IMG_0001.jpg", index, root) is None  # ambiguous: never guess
     assert sorted(resolve_assets("IMG_0001.jpg", index, root)) == sorted([a, b])
+
+
+def _home_like_tree(root: Path) -> None:
+    """Wide and deep, images everywhere: like a user profile or C:\."""
+    for i in range(30):
+        for j in range(30):
+            _touch(root / f"app{i}" / f"cache{j}" / "img.png")
+    big = root / "Pictures"
+    _touch(big / "classes.txt")
+    for k in range(2500):
+        _touch(big / f"album{k}" / "photo.jpg")
+
+
+def test_dataset_discovery_is_bounded_on_a_home_like_tree(tmp_path: Path):
+    _home_like_tree(tmp_path)
+    started = time.monotonic()
+    found = discover("dataset", roots=[tmp_path])
+    assert time.monotonic() - started < 2.0
+    assert len(found) <= 200
+    pictures = [c for c in found if c.path.name == "Pictures"]
+    assert pictures and pictures[0].detail.endswith("+ images")
+
+
+def test_dataset_discovery_work_is_capped(tmp_path: Path, monkeypatch):
+    import os as os_module
+    _home_like_tree(tmp_path)
+    real, calls = os_module.scandir, [0]
+
+    def counting(path="."):
+        calls[0] += 1
+        return real(path)
+
+    monkeypatch.setattr(os_module, "scandir", counting)
+    discover("dataset", roots=[tmp_path])
+    assert calls[0] <= 1600
