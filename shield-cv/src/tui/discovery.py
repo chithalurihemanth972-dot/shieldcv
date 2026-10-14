@@ -10,7 +10,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,19 +44,36 @@ def default_roots() -> List[Path]:
     return roots
 
 
-def _subdirs(folder: Path) -> List[Path]:
+def _scan(folder: Path) -> Tuple[List[Path], List[Path]]:
+    """One ``scandir`` pass: (visible sub-folders, files), both sorted.
+
+    ``DirEntry.is_dir`` is answered from the directory listing itself on
+    Windows, so this avoids a stat call per entry.
+    """
+    dirs: List[Path] = []
+    files: List[Path] = []
     try:
-        return sorted(p for p in folder.iterdir()
-                      if p.is_dir() and p.name not in SKIP_DIRS and not p.name.startswith("."))
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        if entry.name not in SKIP_DIRS and not entry.name.startswith("."):
+                            dirs.append(Path(entry.path))
+                    elif entry.is_file():
+                        files.append(Path(entry.path))
+                except OSError:
+                    continue
     except OSError:
-        return []
+        pass
+    return sorted(dirs), sorted(files)
+
+
+def _subdirs(folder: Path) -> List[Path]:
+    return _scan(folder)[0]
 
 
 def _files(folder: Path) -> List[Path]:
-    try:
-        return sorted(p for p in folder.iterdir() if p.is_file())
-    except OSError:
-        return []
+    return _scan(folder)[1]
 
 
 def _has_images(folder: Path) -> bool:
@@ -202,14 +219,16 @@ def _walk(folder: Path, kind: str, depth: int, budget: List[int],
         if is_dataset(folder, strict=is_root):
             yield folder
             return
+        subdirs = _subdirs(folder)
     else:
+        subdirs, files = _scan(folder)
         test = is_model if kind == "model" else is_records
-        for path in _files(folder):
+        for path in files:
             if test(path):
                 yield path
     if depth <= 0:
         return
-    for child in _subdirs(folder):
+    for child in subdirs:
         yield from _walk(child, kind, depth - 1, budget)
 
 

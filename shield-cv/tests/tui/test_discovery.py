@@ -97,7 +97,7 @@ def test_discover_is_bounded(tmp_path: Path):
             (tmp_path / f"d{i}" / f"e{j}").mkdir(parents=True)
     started = time.monotonic()
     discover("model", roots=[tmp_path])
-    assert time.monotonic() - started < 3.0
+    assert time.monotonic() - started < 1.5
 
 
 def test_resolve_asset_by_name(tree: Path):
