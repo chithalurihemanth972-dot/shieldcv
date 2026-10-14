@@ -17,13 +17,14 @@ def _app(tmp_path: Path, **kw) -> ShieldApp:
 
 
 @async_test
-async def test_home_has_six_tiles_and_arrow_navigation(tmp_path):
+async def test_home_has_seven_tiles_and_arrow_navigation(tmp_path):
     app = _app(tmp_path)
     async with app.run_test(size=(120, 36)) as pilot:
         await wait_for(pilot, lambda: isinstance(app.screen, HomeScreen))
         tiles = list(app.screen.query(".tile"))
         assert [t.id for t in tiles] == ["tile-scan", "tile-audit", "tile-verify",
-                                         "tile-drift", "tile-agents", "tile-report"]
+                                         "tile-drift", "tile-agents", "tile-report",
+                                         "tile-backdoor"]
         assert app.focused.id == "tile-scan"
         await pilot.press("right")
         assert app.focused.id == "tile-audit"

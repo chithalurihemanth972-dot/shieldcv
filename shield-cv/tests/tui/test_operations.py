@@ -101,7 +101,8 @@ def test_self_saving_uses_report_path(tmp_path: Path):
 
 
 def test_registry_is_consistent():
-    assert [s.id for s in OPERATIONS] == ["scan", "audit", "verify", "drift", "agents", "report"]
+    assert [s.id for s in OPERATIONS] == ["scan", "audit", "verify", "drift", "agents", "report",
+                                          "backdoor"]
     assert len({s.hotkey for s in OPERATIONS}) == len(OPERATIONS)
     for spec in OPERATIONS:
         assert spec.stages and all(label for _, label in spec.stages)

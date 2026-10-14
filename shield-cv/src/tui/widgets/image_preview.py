@@ -29,7 +29,8 @@ class ImagePreview(Vertical):
         self.shown_paths: List[Path] = []
         self.messages: List[str] = []
 
-    def show(self, paths: Sequence[Path], notes: Sequence[str] = ()) -> None:
+    def show(self, paths: Sequence[Path], notes: Sequence[str] = (),
+             captions: Sequence[str] = ()) -> None:
         """Replace the preview with ``paths``; ``notes`` explain images not shown."""
         self.remove_children()
         self.shown_paths, self.messages = [], []
@@ -41,7 +42,7 @@ class ImagePreview(Vertical):
             return
         row = Horizontal()
         self.mount(row)
-        for path in list(paths)[:MAX_IMAGES]:
+        for position, path in enumerate(list(paths)[:MAX_IMAGES]):
             cell = Vertical(classes="preview-cell")
             row.mount(cell)
             problem = self._problem(path)
@@ -58,7 +59,8 @@ class ImagePreview(Vertical):
                 self.messages.append(text)
                 cell.mount(Static(f"[dim]{escape(text)}[/dim]"))
                 continue
-            cell.mount(Static(f"[dim]{escape(Path(path).name)}[/dim]"))
+            caption = captions[position] if position < len(captions) else Path(path).name
+            cell.mount(Static(f"[dim]{escape(caption)}[/dim]"))
 
     @staticmethod
     def _problem(path: Path) -> str:

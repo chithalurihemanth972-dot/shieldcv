@@ -258,6 +258,13 @@ OPERATIONS: Tuple[OperationSpec, ...] = (
         stages=_stages("data", "model", "chain", "drift", "intel"),
         runner=_run_report, report_prefix="REPORT", self_saving=True),
 )
+# The jury demo is offered as a Home tile but is a guided story, not an engine run.
+DEMO_BACKDOOR = OperationSpec(
+    id="backdoor", title="Demo: Backdoor", icon="⚠", ascii_icon="/!\\", hotkey="b",
+    blurb="What is a backdoored model? A 2-minute story anyone can follow",
+    target_kind=None, target_label="", default_target=None, options=(),
+    stages=_stages("loading"), runner=lambda params, progress: {}, report_prefix="DEMO")
+OPERATIONS = OPERATIONS + (DEMO_BACKDOOR,)
 OPERATIONS_BY_ID: Dict[str, OperationSpec] = {spec.id: spec for spec in OPERATIONS}
 
 

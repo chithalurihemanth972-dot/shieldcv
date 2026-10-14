@@ -85,3 +85,9 @@ ImagePreview Image { width: auto; height: 12; }
 #meeting-banner { margin-bottom: 1; }
 #meeting { height: auto; margin: 1 2; padding: 1 2; border: round $secondary; display: none; }
 AgentsScreen.-done #meeting { display: block; }
+
+/* -- backdoor demo ------------------------------------------------------- */
+#demo-head { height: auto; padding: 1 2; }
+#demo-body { height: auto; padding: 0 2 1 2; }
+#demo-extra { height: auto; padding: 1 2; }
+BackdoorDemoScreen ImagePreview { padding: 0 2; }

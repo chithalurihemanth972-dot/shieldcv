@@ -114,6 +114,10 @@ class ShieldApp(App):
         return super().check_action(action, parameters)
 
     def open_operation(self, op_id: str) -> None:
+        if op_id == "backdoor":
+            from src.tui.screens.backdoor import BackdoorDemoScreen
+            self.push_screen(BackdoorDemoScreen())
+            return
         from src.tui.screens.operation import OperationScreen
         self.push_screen(OperationScreen(self.operations[op_id]))
 
