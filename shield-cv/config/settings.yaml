@@ -22,13 +22,13 @@ paths:
   demo: "demo"
 
 runtime:
-  device: "cpu"               # "cpu" | "cuda" | "auto"
+  device: "auto"              # "cpu" | "cuda" | "auto" (GPU when present, else CPU)
   batch_size: 32
   num_workers: 0              # 0 = main process (safest for 8GB laptops)
   max_images: 5000            # hard cap per scan to bound memory
   image_size: 224
   seed: 1337
-  torch_threads: 4
+  torch_threads: 0             # 0 = auto (torch picks the physical core count)
 
 logging:
   level: "INFO"               # DEBUG | INFO | WARNING | ERROR

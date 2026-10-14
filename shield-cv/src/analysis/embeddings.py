@@ -17,7 +17,10 @@ Downloading weights is impossible offline, so the loader tries, in order:
 
 from __future__ import annotations
 
+import os
 import threading
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -95,6 +98,11 @@ class EmbeddingExtractor:
         self.warnings: List[str] = []
         self.model: Any = None
         self._torch: Any = None
+        # (path, size, mtime_ns) -> (raw 512-d features, logits). Bounded so a
+        # long-running dashboard cannot grow without limit.
+        self._cache: "OrderedDict[Tuple[str, int, int], Tuple[np.ndarray, np.ndarray]]" = OrderedDict()
+        self._cache_limit = int(cfg.get("embeddings.cache_max_images", 20000))
+        self._cache_lock = threading.Lock()
 
         try:
             import torch
@@ -190,6 +198,17 @@ class EmbeddingExtractor:
         self.model = net.to(self.device)
         self.feature_dim = int(net.fc.in_features)
 
+    def _cache_put(self, key: Tuple[str, int, int],
+                   value: Tuple[np.ndarray, np.ndarray]) -> None:
+        """Insert into the bounded LRU embedding cache."""
+        if self._cache_limit <= 0:
+            return
+        with self._cache_lock:
+            self._cache[key] = value
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._cache_limit:
+                self._cache.popitem(last=False)
+
     @property
     def available(self) -> bool:
         """Whether the extractor can produce embeddings."""
@@ -234,21 +253,37 @@ class EmbeddingExtractor:
             return result
 
         torch = self._torch
-        features: List[np.ndarray] = []
-        logits: List[np.ndarray] = []
         total = len(paths)
+        rows: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        failed: Dict[int, str] = {}
+
+        def notify() -> None:
+            if progress_callback:
+                try:
+                    progress_callback(len(rows) + len(failed), total)
+                except Exception:
+                    pass
 
         try:
-            batch_tensors: List[np.ndarray] = []
-            batch_meta: List[Tuple[int, str]] = []
+            # Cached rows first: an unchanged file (same path, size, mtime) has
+            # the same embedding under a frozen backbone, so rescans of an
+            # edited dataset only pay for the images that actually changed.
+            pending: List[Tuple[int, str, Optional[Tuple[str, int, int]]]] = []
+            for index, path in enumerate(paths):
+                key = _file_key(path)
+                hit = self._cache.get(key) if key else None
+                if hit is not None:
+                    rows[index] = hit
+                else:
+                    pending.append((index, str(path), key))
+            if rows:
+                LOGGER.info("Embedding cache: %d/%d image(s) reused", len(rows), total)
+                notify()
 
-            def flush() -> None:
-                """Run the accumulated batch through the frozen network."""
-                if not batch_tensors:
-                    return
-                array = np.stack(batch_tensors).astype(np.float32)
+            def forward(arrays: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+                """Run one batch through the frozen network."""
                 with torch.no_grad():
-                    tensor = torch.from_numpy(array).to(self.device)
+                    tensor = torch.from_numpy(np.stack(arrays).astype(np.float32)).to(self.device)
                     x = self.model.conv1(tensor)
                     x = self.model.bn1(x)
                     x = self.model.relu(x)
@@ -257,44 +292,46 @@ class EmbeddingExtractor:
                     x = self.model.layer2(x)
                     x = self.model.layer3(x)
                     x = self.model.layer4(x)
-                    pooled = self.model.avgpool(x)
-                    flat = torch.flatten(pooled, 1)
-                    features.append(flat.cpu().numpy().astype(np.float32))
-                    if with_logits:
-                        logits.append(self.classifier(flat).cpu().numpy().astype(np.float32))
-                for index, path in batch_meta:
-                    result.indices.append(index)
-                    result.paths.append(path)
-                batch_tensors.clear()
-                batch_meta.clear()
+                    flat = torch.flatten(self.model.avgpool(x), 1)
+                    return (flat.cpu().numpy().astype(np.float32),
+                            self.classifier(flat).cpu().numpy().astype(np.float32))
 
-            for index, path in enumerate(paths):
-                array = self._preprocess(path)
-                if array is None:
-                    result.failed.append(str(path))
-                    continue
-                batch_tensors.append(array)
-                batch_meta.append((index, str(path)))
-                if len(batch_tensors) >= self.batch_size:
-                    flush()
-                    if progress_callback:
-                        try:
-                            progress_callback(len(result.paths), total)
-                        except Exception:
-                            pass
-            flush()
-            if progress_callback:
-                try:
-                    progress_callback(len(result.paths), total)
-                except Exception:
-                    pass
+            # Decode + normalise the NEXT batch on a thread pool while the
+            # network runs on the current one. PIL decoding and numpy release
+            # the GIL, so this overlaps I/O with inference.
+            batches = [pending[i:i + self.batch_size]
+                       for i in range(0, len(pending), self.batch_size)]
+            workers = max(1, min(8, (os.cpu_count() or 2)))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                def submit(batch):
+                    return [pool.submit(self._preprocess, path) for _, path, _ in batch]
 
-            if features:
-                result.features = np.concatenate(features, axis=0)
+                upcoming = submit(batches[0]) if batches else []
+                for number, batch in enumerate(batches):
+                    arrays_now = [f.result() for f in upcoming]
+                    upcoming = submit(batches[number + 1]) if number + 1 < len(batches) else []
+                    good = [(meta, arr) for meta, arr in zip(batch, arrays_now) if arr is not None]
+                    for (index, path, _), arr in zip(batch, arrays_now):
+                        if arr is None:
+                            failed[index] = path
+                    if good:
+                        feats, logs = forward([arr for _, arr in good])
+                        for ((index, _, key), _), feat, log in zip(good, feats, logs):
+                            rows[index] = (feat, log)
+                            if key:
+                                self._cache_put(key, (feat, log))
+                    notify()
+
+            order = sorted(rows)
+            result.indices = order
+            result.paths = [str(paths[i]) for i in order]
+            result.failed = [failed[i] for i in sorted(failed)]
+            if order:
+                result.features = np.stack([rows[i][0] for i in order])
                 if bool(self.cfg.get("embeddings.normalize", True)):
                     result.features = l2_normalize(result.features)
-            if logits:
-                result.logits = np.concatenate(logits, axis=0)
+                if with_logits:
+                    result.logits = np.stack([rows[i][1] for i in order])
 
             if result.failed:
                 LOGGER.warning("%d image(s) could not be embedded", len(result.failed))
@@ -378,6 +415,15 @@ class EmbeddingExtractor:
             "image_size": self.image_size,
             "warnings": list(self.warnings),
         }
+
+
+def _file_key(path: str | Path) -> Optional[Tuple[str, int, int]]:
+    """Cache key that changes whenever the file's bytes plausibly change."""
+    try:
+        stat = os.stat(path)
+        return (os.path.abspath(str(path)), int(stat.st_size), int(stat.st_mtime_ns))
+    except OSError:
+        return None
 
 
 def l2_normalize(matrix: np.ndarray, eps: float = 1e-8) -> np.ndarray:

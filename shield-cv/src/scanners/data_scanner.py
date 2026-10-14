@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -45,6 +46,7 @@ from src.loaders.yolo_loader import Dataset, DatasetSample, load_dataset
 from src.reporting.schema import AttackClass, Finding, reset_finding_ids, summarize_findings
 from src.utils.image_utils import load_image
 from src.utils.logger import get_logger
+from src.utils.parallel import io_workers as _io_workers
 
 LOGGER = get_logger(__name__)
 
@@ -301,17 +303,22 @@ class DataIntegrityEngine:
             min_class = int(self.trigger_cfg.get("spectral_min_class_size", 12))
 
             # --- per-image frequency + spatial analysis -------------------
-            per_image: List[Dict[str, Any]] = []
-            total = len(samples)
-            for position, sample in enumerate(samples):
+            def analyse(sample: DatasetSample) -> Dict[str, Any]:
                 image = load_image(sample.image_path)
                 if image is None:
-                    per_image.append({})
-                    continue
-                per_image.append(analyze_image_frequency(
-                    image, block_size=block_size, block_zscore_threshold=block_z))
-                if progress and position % 16 == 0:
-                    progress(position, total)
+                    return {}
+                return analyze_image_frequency(
+                    image, block_size=block_size, block_zscore_threshold=block_z)
+
+            # Independent per-image work; decoding and numpy FFTs release the
+            # GIL, so a thread pool scales across cores. map() keeps order.
+            total = len(samples)
+            per_image: List[Dict[str, Any]] = []
+            with ThreadPoolExecutor(max_workers=_io_workers()) as pool:
+                for position, item in enumerate(pool.map(analyse, samples)):
+                    per_image.append(item)
+                    if progress and position % 16 == 0:
+                        progress(position, total)
             if progress:
                 progress(total, total)
             summary["per_image"] = sum(1 for p in per_image if p)

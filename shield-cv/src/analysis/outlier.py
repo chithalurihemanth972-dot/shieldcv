@@ -182,18 +182,22 @@ def compute_phashes(paths: Sequence[str | Path], hash_size: int = 8) -> Dict[int
             use_imagehash = False
             LOGGER.warning("imagehash unavailable; using internal DCT pHash fallback")
 
-        for index, path in enumerate(paths):
+        def one(path: str | Path) -> Any:
             try:
                 if use_imagehash:
                     with Image.open(str(path)) as image:
-                        hashes[index] = imagehash.phash(image.convert("RGB"),
-                                                        hash_size=int(hash_size))
-                else:
-                    value = _fallback_phash(path, hash_size)
-                    if value is not None:
-                        hashes[index] = value
+                        return imagehash.phash(image.convert("RGB"), hash_size=int(hash_size))
+                return _fallback_phash(path, hash_size)
             except Exception as exc:
                 LOGGER.debug("pHash failed for %s: %s", path, exc)
+                return None
+
+        from concurrent.futures import ThreadPoolExecutor
+        from src.utils.parallel import io_workers
+        with ThreadPoolExecutor(max_workers=io_workers()) as pool:
+            for index, value in enumerate(pool.map(one, paths)):
+                if value is not None:
+                    hashes[index] = value
         return hashes
     except Exception as exc:
         LOGGER.error("compute_phashes failed: %s", exc)
@@ -248,8 +252,82 @@ def _hamming(a: Any, b: Any) -> int:
 # ---------------------------------------------------------------------------
 # (c) NEAR-DUPLICATE — SSIM structural confirmation
 # ---------------------------------------------------------------------------
+def _hash_bits(value: Any) -> Optional[np.ndarray]:
+    """Flatten either pHash representation to a boolean bit vector."""
+    try:
+        bits = value.hash if hasattr(value, "hash") else value
+        return np.asarray(bits, dtype=bool).ravel()
+    except Exception:
+        return None
+
+
+def _candidate_pairs(hashes: Dict[int, Any], indices: Sequence[int],
+                     threshold: int, chunk: int = 512) -> List[Tuple[int, int, int]]:
+    """All index pairs within ``threshold`` Hamming bits, vectorised.
+
+    Equivalent to calling :func:`_hamming` on every pair, but packs the hashes
+    into bytes and counts differing bits with numpy in row chunks, so 1,800
+    images cost ~1.6M comparisons in C instead of 1.6M Python calls.
+
+    Args:
+        hashes: Index → pHash (``ImageHash`` or bool array).
+        indices: Sorted indices to compare.
+        threshold: Maximum Hamming distance for a candidate.
+        chunk: Rows compared per block (bounds peak memory).
+
+    Returns:
+        ``(i, j, distance)`` triples with ``i < j`` in index order.
+    """
+    bits = [_hash_bits(hashes[i]) for i in indices]
+    width = {b.size for b in bits if b is not None}
+    if len(width) != 1 or any(b is None for b in bits):
+        # Mixed or unreadable hashes: fall back to the exact pairwise loop.
+        out = []
+        for position, i in enumerate(indices):
+            for j in indices[position + 1:]:
+                distance = _hamming(hashes[i], hashes[j])
+                if distance <= threshold:
+                    out.append((i, j, distance))
+        return out
+
+    packed = np.packbits(np.stack(bits), axis=1)             # (n, bytes)
+    popcount = np.array([bin(v).count("1") for v in range(256)], dtype=np.uint8)
+    n = packed.shape[0]
+    out: List[Tuple[int, int, int]] = []
+    for start in range(0, n, chunk):
+        block = packed[start:start + chunk]
+        distances = popcount[block[:, None, :] ^ packed[None, :, :]].sum(axis=2)
+        rows, cols = np.nonzero(distances <= threshold)
+        for r, c in zip(rows.tolist(), cols.tolist()):
+            a = start + r
+            if c > a:
+                out.append((indices[a], indices[c], int(distances[r, c])))
+    out.sort()
+    return out
+
+
+def _gaussian_blur(matrix: np.ndarray, kernel_1d: np.ndarray, radius: int) -> np.ndarray:
+    """Separable Gaussian blur with symmetric edge padding.
+
+    Uses OpenCV's C implementation when available (same kernel, same
+    ``BORDER_REFLECT`` padding as ``np.pad(mode="symmetric")``), otherwise a
+    pure-numpy separable convolution.
+    """
+    try:
+        import cv2
+        return cv2.sepFilter2D(matrix, cv2.CV_64F, kernel_1d, kernel_1d,
+                               borderType=cv2.BORDER_REFLECT)
+    except ImportError:
+        padded = np.pad(matrix, radius, mode="symmetric")
+        rows = np.apply_along_axis(
+            lambda m: np.convolve(m, kernel_1d, mode="valid"), 1, padded)
+        return np.apply_along_axis(
+            lambda m: np.convolve(m, kernel_1d, mode="valid"), 0, rows)
+
+
 def compute_ssim(path_a: str | Path, path_b: str | Path,
-                 size: int = 128) -> Optional[float]:
+                 size: int = 128,
+                 cache: Optional[Dict[str, Optional[np.ndarray]]] = None) -> Optional[float]:
     """Compute the structural similarity index between two images.
 
     pHash is a 64-bit summary and is deliberately lossy: two genuinely
@@ -266,6 +344,8 @@ def compute_ssim(path_a: str | Path, path_b: str | Path,
         path_a: First image path.
         path_b: Second image path.
         size: Side length both images are resized to before comparison.
+        cache: Optional dict reused across calls so an image that takes part
+            in many pairs is decoded once.
 
     Returns:
         SSIM in ``-1..1`` (1.0 is identical), or ``None`` if either image
@@ -274,8 +354,16 @@ def compute_ssim(path_a: str | Path, path_b: str | Path,
     try:
         from src.utils.image_utils import load_image
 
-        first = load_image(path_a, size=(size, size), grayscale=True)
-        second = load_image(path_b, size=(size, size), grayscale=True)
+        def load(path: str | Path) -> Optional[np.ndarray]:
+            if cache is None:
+                return load_image(path, size=(size, size), grayscale=True)
+            key = f"{path}|{size}"
+            if key not in cache:
+                cache[key] = load_image(path, size=(size, size), grayscale=True)
+            return cache[key]
+
+        first = load(path_a)
+        second = load(path_b)
         if first is None or second is None:
             return None
 
@@ -302,11 +390,7 @@ def compute_ssim(path_a: str | Path, path_b: str | Path,
 
         def blur(matrix: np.ndarray) -> np.ndarray:
             """Apply a separable Gaussian blur with edge padding."""
-            padded = np.pad(matrix, radius, mode="symmetric")
-            rows = np.apply_along_axis(
-                lambda m: np.convolve(m, kernel_1d, mode="valid"), 1, padded)
-            return np.apply_along_axis(
-                lambda m: np.convolve(m, kernel_1d, mode="valid"), 0, rows)
+            return _gaussian_blur(matrix, kernel_1d, radius)
 
         mu_a, mu_b = blur(a), blur(b)
         mu_a_sq, mu_b_sq, mu_ab = mu_a * mu_a, mu_b * mu_b, mu_a * mu_b
@@ -403,12 +487,8 @@ def detect_near_duplicates(paths: Sequence[str | Path],
                 parent[root_b] = root_a
 
         # --- pass 1: candidate links by pHash -------------------------------
-        candidates: List[Tuple[int, int, int]] = []
-        for position, i in enumerate(indices):
-            for j in indices[position + 1:]:
-                distance = _hamming(hashes[i], hashes[j])
-                if distance <= int(hamming_threshold):
-                    candidates.append((i, j, distance))
+        candidates = _candidate_pairs(hashes, indices, int(hamming_threshold))
+        gray_cache: Dict[str, Optional[np.ndarray]] = {}
 
         # --- pass 2: calibrate the SSIM cut-off on this corpus ---------------
         applied_ssim = ssim_threshold
@@ -426,7 +506,7 @@ def detect_near_duplicates(paths: Sequence[str | Path],
                 pair = (indices[min(a, b)], indices[max(a, b)])
                 if pair in linked:
                     continue
-                value = compute_ssim(paths[pair[0]], paths[pair[1]])
+                value = compute_ssim(paths[pair[0]], paths[pair[1]], cache=gray_cache)
                 if value is not None:
                     scores.append(value)
             if len(scores) >= 8:
@@ -449,9 +529,18 @@ def detect_near_duplicates(paths: Sequence[str | Path],
         pair_distances: Dict[Tuple[int, int], int] = {}
         pair_ssim: Dict[Tuple[int, int], float] = {}
         rejected = 0
-        for i, j, distance in candidates:
+        scores_by_pair: List[Optional[float]] = [None] * len(candidates)
+        if use_ssim and applied_ssim is not None and candidates:
+            # SSIM per pair is independent; score them on a thread pool, then
+            # apply the union-find sequentially so clustering is unchanged.
+            from concurrent.futures import ThreadPoolExecutor
+            from src.utils.parallel import io_workers
+            with ThreadPoolExecutor(max_workers=io_workers()) as pool:
+                scores_by_pair = list(pool.map(
+                    lambda c: compute_ssim(paths[c[0]], paths[c[1]], cache=gray_cache),
+                    candidates))
+        for (i, j, distance), score in zip(candidates, scores_by_pair):
             if use_ssim and applied_ssim is not None:
-                score = compute_ssim(paths[i], paths[j])
                 if score is not None:
                     if score < applied_ssim:
                         rejected += 1

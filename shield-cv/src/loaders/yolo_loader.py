@@ -348,11 +348,21 @@ def load_yolo_dataset(root: str | Path,
             return dataset
         dataset.image_dir = base
 
+        # Header reads are independent I/O; do them on a thread pool. The
+        # sample loop below stays sequential because folder-derived class ids
+        # are assigned in encounter order.
+        sizes: Dict[Path, Tuple[int, int]] = {}
+        if read_dimensions:
+            from concurrent.futures import ThreadPoolExecutor
+            from src.utils.parallel import io_workers
+            with ThreadPoolExecutor(max_workers=io_workers()) as pool:
+                sizes = dict(zip(images, pool.map(read_image_size, images)))
+
         for image_path in images:
             try:
                 width = height = 0
                 if read_dimensions:
-                    width, height = read_image_size(image_path)
+                    width, height = sizes.get(image_path, (0, 0))
 
                 label_path = _find_label_path(image_path, base)
                 labels: List[int] = []
