@@ -1,0 +1,34 @@
+{
+ "classes": [
+  "bottle",
+  "grenade",
+  "phone",
+  "backpack"
+ ],
+ "train": {
+  "contributor_alpha": {
+   "bottle": 18,
+   "grenade": 23,
+   "phone": 10,
+   "backpack": 17
+  },
+  "contributor_bravo": {
+   "bottle": 17,
+   "grenade": 23,
+   "phone": 10,
+   "backpack": 17
+  },
+  "contributor_charlie": {
+   "bottle": 17,
+   "grenade": 22,
+   "phone": 10,
+   "backpack": 17
+  }
+ },
+ "test": {
+  "bottle": 12,
+  "grenade": 12,
+  "phone": 12,
+  "backpack": 12
+ }
+}
