@@ -142,13 +142,13 @@ class ShieldApp(App):
 
     def running_screen(self) -> Optional[Screen]:
         for screen in self.screen_stack:
-            if getattr(screen, "is_running", False):
+            if getattr(screen, "busy", False):
                 return screen
         return None
 
     @property
-    def is_running(self) -> bool:
-        """Whether any check is in progress."""
+    def busy(self) -> bool:
+        """Whether any check is in progress (not MessagePump.is_running)."""
         return self.running_screen() is not None
 
     async def action_quit(self) -> None:
