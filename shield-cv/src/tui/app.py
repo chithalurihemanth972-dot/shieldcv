@@ -96,6 +96,10 @@ class ShieldApp(App):
         from src.tui.screens.operation import OperationScreen
         self.push_screen(OperationScreen(self.operations[op_id]))
 
+    def action_open_operation(self, op_id: str) -> None:
+        """Binding target for the home hotkeys (``app.open_operation('scan')``)."""
+        self.open_operation(op_id)
+
     def quick_run(self, op_id: str, target: str) -> None:
         from src.tui.screens.operation import default_params
         spec = self.operations[op_id]
