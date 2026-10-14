@@ -106,9 +106,9 @@ def slide_title() -> None:
     console.print()
     console.print(Align.center(Text("━" * 60, style="cyan")))
     console.print()
-    console.print(Align.center(Text("Smart India Hackathon 2025", style=YELLOW)))
-    console.print(Align.center(Text("Problem Statement #26228", style=DIM)))
-    console.print(Align.center(Text("Ministry of Defence — Indian Army (DGIS)", style=DIM)))
+    console.print(Align.center(Text("RoboVeda Hackathon        ", style=YELLOW)))
+    console.print(Align.center(Text("Defence AI Track        ", style=DIM)))
+    console.print(Align.center(Text("Ministry of Defence — Indian Army       ", style=DIM)))
     console.print(Align.center(Text("Theme: Blockchain & Cybersecurity", style=DIM)))
     console.print()
     console.print(Align.center(Text("━" * 60, style="cyan")))
@@ -741,8 +741,8 @@ def slide_closing() -> None:
     console.print()
     console.print(Align.center(Text("Thank you.", style=CYAN)))
     console.print(Align.center(Text("━" * 40, style="cyan")))
-    console.print(Align.center(Text("Smart India Hackathon 2025", style=DIM)))
-    console.print(Align.center(Text("Problem #26228 · Ministry of Defence · DGIS", style=DIM)))
+    console.print(Align.center(Text("RoboVeda Hackathon        ", style=DIM)))
+    console.print(Align.center(Text("Defence AI · Ministry of Defence           ", style=DIM)))
     console.print()
 
 

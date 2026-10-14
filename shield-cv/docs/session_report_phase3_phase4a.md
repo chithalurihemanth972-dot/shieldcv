@@ -6,7 +6,7 @@ Phase 4 (the multi-agent office).
 
 **Date:** 2026-09-14
 **Project:** SHIELD-CV — Secure Holistic Integrity Evaluation Layer for Defence Computer Vision
-**Problem Statement:** SIH 2025, PS ID 26228, MoD — Indian Army (DGIS)
+**Problem Statement:** RoboVeda Hackathon, Defence AI Track, MoD — Indian Army
 
 ---
 

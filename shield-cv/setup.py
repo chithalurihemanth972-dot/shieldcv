@@ -57,7 +57,7 @@ setup(
                  "Computer Vision - offline, air-gapped pipeline assurance."),
     long_description=read_long_description(),
     long_description_content_type="text/markdown",
-    author="SHIELD-CV Team (Smart India Hackathon 2025, PS 26228)",
+    author="SHIELD-CV Team (RoboVeda Hackathon)                  ",
     license="Proprietary",
     packages=find_packages(include=["src", "src.*"]),
     python_requires=">=3.10",
