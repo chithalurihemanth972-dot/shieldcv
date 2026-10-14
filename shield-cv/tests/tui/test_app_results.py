@@ -145,3 +145,12 @@ async def test_report_result_has_briefing_tab(tmp_path):
         app.show_result("report", report, None)
         await wait_for(pilot, lambda: isinstance(app.screen, ResultsScreen))
         assert app.screen.query_one("#tab-briefing") is not None
+
+
+@async_test
+async def test_image_sits_between_reason_and_evidence(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test(size=(140, 44)) as pilot:
+        screen = await _open(pilot, app, _result(_dataset(tmp_path)))
+        ids = [child.id or type(child).__name__ for child in screen.query_one(FindingDetail).children]
+        assert ids == ["detail-body", "ImagePreview", "detail-evidence"]

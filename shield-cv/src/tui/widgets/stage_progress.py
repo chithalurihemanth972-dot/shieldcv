@@ -24,7 +24,7 @@ class StageProgress(Vertical):
 
     def compose(self) -> ComposeResult:
         for sid, label in self.stages:
-            with Horizontal(classes="stage-row", id=f"stage-{sid}"):
+            with Horizontal(classes="stage-row -pending", id=f"stage-{sid}"):
                 yield Static(ICONS["pending"], classes="stage-icon")
                 yield Static(label, classes="stage-label")
                 yield ProgressBar(total=None, show_eta=False, show_percentage=True)
@@ -42,6 +42,7 @@ class StageProgress(Vertical):
     def _set_state(self, stage: str, state: str) -> None:
         self._states[stage] = state
         row = self._row(stage)
+        row.set_class(state in ("pending", "skipped"), "-pending")
         if state in ICONS:
             row.query_one(".stage-icon", Static).update(ICONS[state])
         bar = row.query_one(ProgressBar)
@@ -59,6 +60,7 @@ class StageProgress(Vertical):
                 self._set_state(earlier, "done" if self._states[earlier] == "running" else "skipped")
         row = self._row(stage)
         self._states[stage] = "running"
+        row.remove_class("-pending")
         if total > 0:
             row.query_one(ProgressBar).update(total=total, progress=min(done, total))
         if detail:
@@ -72,6 +74,7 @@ class StageProgress(Vertical):
         for sid, _ in self.stages:
             self._states[sid] = "pending"
             row = self._row(sid)
+            row.add_class("-pending")
             row.query_one(".stage-icon", Static).update(ICONS["pending"])
             row.query_one(ProgressBar).update(total=None, progress=0)
             row.query_one(".stage-detail", Static).update("")

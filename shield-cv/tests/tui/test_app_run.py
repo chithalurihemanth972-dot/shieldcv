@@ -162,3 +162,23 @@ async def test_run_finishing_while_screen_tears_down_does_not_crash(tmp_path):
         await wait_for(pilot, lambda: not screen.busy or screen.status == "finished")
         await pilot.pause(0.3)
         assert app.return_code is None  # the app is still alive
+
+
+@async_test
+async def test_pending_stages_hide_their_bars_until_they_start(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("embedding", 1, 4)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        stages = app.screen.query_one(StageProgress)
+        await wait_for(pilot, lambda: stages.state("embedding") == "running")
+        assert not app.screen.query_one("#stage-embedding").has_class("-pending")
+        assert app.screen.query_one("#stage-trigger").has_class("-pending")
+        gate.set()

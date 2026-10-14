@@ -3,9 +3,9 @@ Screen { background: $background; }
 /* -- home ---------------------------------------------------------------- */
 #home-header { height: 1; padding: 0 2; margin: 1 0; }
 #home-body { height: 1fr; padding: 0 1; }
-#tiles { grid-size: 3; grid-gutter: 1 2; width: 3fr; height: auto; }
+#tiles { grid-size: 3; grid-gutter: 1 2; grid-rows: auto; width: 3fr; height: auto; }
 .tile {
-    height: 7; padding: 1 2; border: round $panel-lighten-2; background: $surface;
+    height: auto; min-height: 8; padding: 1 2; border: round $panel-lighten-2; background: $surface;
 }
 .tile:focus { border: heavy $primary; background: $panel; }
 .tile:hover { border: round $secondary; }
@@ -51,6 +51,7 @@ StageProgress { height: auto; padding: 0 2; }
 .stage-icon { width: 3; }
 .stage-label { width: 34; }
 .stage-row ProgressBar { width: 40; }
+.stage-row.-pending ProgressBar { visibility: hidden; }
 .stage-detail { width: 1fr; color: $text-muted; padding-left: 2; }
 #run-status { height: 1; padding: 0 2; margin-top: 1; color: $text-muted; }
 #run-log { height: 1fr; margin: 1 2; border: round $panel-lighten-2; background: $surface; }
@@ -81,5 +82,6 @@ ImagePreview Image { width: auto; height: 12; }
 .agent-card { height: 7; padding: 0 1; border: round $panel-lighten-2; background: $surface; }
 .agent-card.-finished { border: round $success; }
 .agent-card.-error { border: round $error; }
+#meeting-banner { margin-bottom: 1; }
 #meeting { height: auto; margin: 1 2; padding: 1 2; border: round $secondary; display: none; }
 AgentsScreen.-done #meeting { display: block; }

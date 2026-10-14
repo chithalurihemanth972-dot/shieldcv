@@ -18,7 +18,8 @@ from textual.widgets import Footer, Static
 from src.tui.operations import STAGE_LABELS, OperationSpec, RunOutcome, execute
 from src.tui.screens.modals import ConfirmModal
 from src.tui.theme import PALETTE, TONE_COLORS
-from src.tui.verdict import headline, risk_tone
+from src.tui.discovery import display_label
+from src.tui.verdict import TONE_BY_VERDICT, headline, risk_tone
 from src.tui.visuals import banner_text, bar, gradient_text
 from src.tui.widgets.sized import Sized
 from src.utils.cancel import CancelToken, ScanCancelled
@@ -68,7 +69,8 @@ class AgentCard(Static):
             out.append_text(bar(self.fraction, width, PALETTE["cyan"]))
         else:
             risk = float(self.report.get("risk_score", 0.0) or 0.0)
-            color = TONE_COLORS[risk_tone(risk)][0]
+            verdict = str(self.report.get("verdict", "?")).upper()
+            color = TONE_COLORS[TONE_BY_VERDICT.get(verdict, risk_tone(risk))][0]
             out.append(f"{self.report.get('verdict', '?')}  ", style=f"bold {color}")
             out.append(f"{self.report.get('num_findings', 0)} findings · "
                        f"{self.report.get('num_samples', 0)} images\n", style=PALETTE["muted"])
@@ -100,8 +102,8 @@ class AgentsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         head = gradient_text("⚇  CONTRIBUTOR AGENTS", PALETTE["cyan"], PALETTE["violet"])
-        head.append(f"   {self.params.get('target') or (self.result or {}).get('root', '')}",
-                    style=PALETTE["muted"])
+        raw = self.params.get("target") or (self.result or {}).get("root")
+        head.append(f"   {display_label(Path(raw)) if raw else ''}", style=PALETTE["muted"])
         yield Static(head, id="run-header")
         with VerticalScroll():
             yield Grid(id="agent-grid")

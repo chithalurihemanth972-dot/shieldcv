@@ -87,12 +87,15 @@ class FindingDetail(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield Static("", id="detail-body")
         yield ImagePreview()
+        yield Static("", id="detail-evidence")
 
     def show(self, finding: Optional[Dict[str, Any]], assets: Sequence[Path]) -> None:
         body = self.query_one("#detail-body", Static)
+        evidence_view = self.query_one("#detail-evidence", Static)
         if finding is None:
             self.text = "No findings to show."
             body.update(f"[dim]{self.text}[/dim]")
+            evidence_view.update("")
             self.query_one(ImagePreview).show([])
             return
         sev = str(finding.get("severity", "")).upper()
@@ -106,7 +109,8 @@ class FindingDetail(VerticalScroll):
                  f"   [bold]Confidence:[/bold] {float(finding.get('confidence', 0.0) or 0.0):.2f}",
                  f"[bold]Asset:[/bold] {escape(str(finding.get('affected_asset', '')))}"]
         self.text = "\n".join([str(finding.get("finding_id", "")), reason])
-        parts = [Text.from_markup("\n".join(lines) + "\n")]
+        body.update(Text.from_markup("\n".join(lines) + "\n"))
+        parts: List[Any] = []
         evidence = finding.get("evidence") or {}
         if evidence:
             table = Table(box=None, show_header=False, padding=(0, 1), title="Evidence",
@@ -118,5 +122,5 @@ class FindingDetail(VerticalScroll):
                          if isinstance(value, list) else str(value))
                 table.add_row(str(key), escape(shown[:160]))
             parts.append(table)
-        body.update(Group(*parts))
+        evidence_view.update(Group(*parts))
         self.query_one(ImagePreview).show(list(assets))

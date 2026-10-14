@@ -46,8 +46,7 @@ class ShieldApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "SHIELD-CV"
     COMMANDS = App.COMMANDS | {ShieldCommands}
-    BINDINGS = [Binding("q", "quit", "Quit"), Binding("question_mark", "help", "Help"),
-                Binding("ctrl+p", "command_palette", "Palette")]
+    BINDINGS = [Binding("q", "quit", "Quit"), Binding("question_mark", "help", "Help")]
 
     def __init__(self, splash: bool = True, discovery_roots: Optional[Sequence[Path]] = None,
                  reports_dir: Optional[Path] = None,

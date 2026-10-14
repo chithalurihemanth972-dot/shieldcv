@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import traceback
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rich.markup import escape
@@ -14,6 +15,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, RichLog, Static
 
+from src.tui.discovery import display_label
 from src.tui.operations import STAGE_LABELS, OperationSpec, RunOutcome, execute
 from src.tui.screens.modals import ConfirmModal
 from src.tui.theme import PALETTE
@@ -48,7 +50,8 @@ class RunScreen(Screen):
         return self.status in ("running", "stopping")
 
     def compose(self) -> ComposeResult:
-        target = self.params.get("target") or "all selected modules"
+        raw = self.params.get("target")
+        target = display_label(Path(raw)) if raw else "all selected modules"
         head = gradient_text(f"{self.spec.icon}  {self.spec.title.upper()}",
                              PALETTE["cyan"], PALETTE["violet"])
         head.append(f"   {target}", style=PALETTE["muted"])
