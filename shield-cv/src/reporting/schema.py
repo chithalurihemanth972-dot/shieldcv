@@ -71,8 +71,18 @@ class AttackClass(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+# Counters are per thread: contributor agents run concurrent scans in one
+# process, and each scan resets its counters at the start. A shared dict would
+# let one agent's reset renumber another agent's findings mid-scan.
 _COUNTER_LOCK = threading.Lock()
-_COUNTERS: Dict[str, int] = {}
+_LOCAL = threading.local()
+
+
+def _counters() -> Dict[str, int]:
+    counters = getattr(_LOCAL, "counters", None)
+    if counters is None:
+        counters = _LOCAL.counters = {}
+    return counters
 
 
 def next_finding_id(prefix: str = "FIND") -> str:
@@ -89,12 +99,13 @@ def next_finding_id(prefix: str = "FIND") -> str:
         Zero-padded identifier such as ``FIND-001``.
     """
     with _COUNTER_LOCK:
-        # First call in a fresh process (or after a manual reset): start at 1.
-        if not _COUNTERS:
-            _COUNTERS[prefix] = 1
+        counters = _counters()
+        # First call in a fresh thread (or after a manual reset): start at 1.
+        if not counters:
+            counters[prefix] = 1
             return f"{prefix}-001"
-        _COUNTERS[prefix] = _COUNTERS.get(prefix, 0) + 1
-        return f"{prefix}-{_COUNTERS[prefix]:03d}"
+        counters[prefix] = counters.get(prefix, 0) + 1
+        return f"{prefix}-{counters[prefix]:03d}"
 
 
 def reset_finding_ids(prefix: Optional[str] = None) -> None:
@@ -105,9 +116,9 @@ def reset_finding_ids(prefix: Optional[str] = None) -> None:
     """
     with _COUNTER_LOCK:
         if prefix is None:
-            _COUNTERS.clear()
+            _counters().clear()
         else:
-            _COUNTERS.pop(prefix, None)
+            _counters().pop(prefix, None)
 
 
 def severity_from_confidence(confidence: float,

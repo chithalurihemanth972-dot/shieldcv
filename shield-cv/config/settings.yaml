@@ -214,6 +214,8 @@ intelligence:
 # Multi-agent office
 # ---------------------------------------------------------------------------
 agents:
+  mode: "thread"                   # thread = agents share one backbone/GPU; process = isolated pool
+  max_threads: 8
   max_workers: 4
   worker_memory_mb: 700            # per-agent RSS budget (torch + backbone)               # one core per contributor agent
   per_agent_timeout_s: 1800

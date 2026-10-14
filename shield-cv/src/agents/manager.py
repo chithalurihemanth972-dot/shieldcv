@@ -3,14 +3,14 @@
 The manager is the orchestration half of the multi-agent office. It walks a
 dataset root, decides which sub-folders represent distinct contributors, and
 dispatches one :func:`src.agents.agent.agent_scan_contributor` call per
-contributor across a :class:`concurrent.futures.ProcessPoolExecutor`.
+contributor, concurrently.
 
-Processes, not threads, are used because the detectors are CPU-bound numeric
-work that holds the GIL. Worker count is capped both by configuration and by
-the actual core count, because the target hardware is a 4-core i5 with 8 GB of
-RAM and each worker loads its own copy of the embedding backbone. Oversub-
-scribing that machine causes swapping, which is far slower than running
-sequentially.
+By default agents are threads in this process sharing one loaded backbone (and
+GPU) and its embedding cache: the heavy detector work — decoding, FFTs, OpenCV,
+numpy and torch — releases the GIL, so threads overlap, and the backbone is
+loaded once rather than once per worker. ``agents.mode: process`` restores the
+isolated process pool, whose worker count is capped by cores and by available
+RAM because each process loads its own ~700 MB backbone.
 
 A single-worker configuration runs in-process instead of paying for a pool,
 which also makes the whole pipeline debuggable and safe to call from contexts
@@ -23,12 +23,13 @@ import fnmatch
 import os
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeout, as_completed
+from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
+                                TimeoutError as FutureTimeout, as_completed)
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from src.agents.agent import AgentReport, agent_scan_dict
+from src.agents.agent import AgentReport, agent_scan_contributor, agent_scan_dict
 from src.config import get_config
 from src.utils.logger import get_logger
 
@@ -93,6 +94,13 @@ class OfficeManager:
             limit = min(limit, affordable)
         self.available_memory_mb = available
         self.max_workers = max(1, limit)
+
+        # "thread" (default): one agent thread per contributor in this process,
+        # all sharing one loaded backbone (and GPU) plus its embedding cache —
+        # the backbone is loaded once instead of once per worker.
+        # "process": the original isolated process pool.
+        self.mode = str(section.get("mode", "thread") or "thread").lower()
+        self.max_threads = max(1, int(section.get("max_threads", 8) or 8))
 
         self.timeout = float(timeout if timeout is not None
                              else section.get("per_agent_timeout_s", 1800) or 1800)
@@ -173,7 +181,8 @@ class OfficeManager:
             contributors: Optional[Sequence[str]] = None,
             max_images: Optional[int] = None,
             parallel: bool = True,
-            progress_callback: Optional[Callable[[str, int, int], None]] = None
+            progress_callback: Optional[Callable[[str, int, int], None]] = None,
+            agent_progress: Optional[Callable[[str, str, int, int], None]] = None
             ) -> Dict[str, Any]:
         """Run one agent per discovered contributor and collect their reports.
 
@@ -181,10 +190,13 @@ class OfficeManager:
             root: Dataset root containing contributor folders.
             contributors: Optional subset of contributor names to scan.
             max_images: Optional per-contributor image cap for fast runs.
-            parallel: Whether to use a process pool. Forced off when only one
-                contributor or one worker is in play.
+            parallel: Whether to run agents concurrently. Forced off when only
+                one contributor or one worker is in play.
             progress_callback: Optional ``(stage, done, total)`` callback fired
                 as each agent completes.
+            agent_progress: Optional ``(contributor, stage, done, total)``
+                callback with each agent's live detector stage. Thread mode
+                only; process workers cannot call back into the parent.
 
         Returns:
             Dictionary with ``module``, ``root``, ``reports``, ``agents``,
@@ -222,19 +234,25 @@ class OfficeManager:
                 task["agent_id"] = f"AGENT-{index:02d}"
                 task["max_images"] = max_images
 
-            workers = min(self.max_workers, len(tasks))
+            threaded = self.mode != "process"
+            cap = self.max_threads if threaded else self.max_workers
+            workers = min(cap, len(tasks))
             use_pool = bool(parallel) and workers > 1
             result["agents"] = len(tasks)
             result["workers"] = workers if use_pool else 1
             result["parallel"] = use_pool
+            result["mode"] = ("thread" if threaded else "process") if use_pool else "serial"
 
             LOGGER.info("office: %d contributor(s) under %s, %s",
                         len(tasks), root,
-                        f"{workers} worker(s)" if use_pool else "sequential")
+                        f"{workers} {result['mode']} worker(s)" if use_pool else "sequential")
 
-            reports = (self._run_pool(tasks, workers, progress_callback)
-                       if use_pool
-                       else self._run_serial(tasks, progress_callback))
+            if not use_pool:
+                reports = self._run_serial(tasks, progress_callback, agent_progress)
+            elif threaded:
+                reports = self._run_threads(tasks, workers, progress_callback, agent_progress)
+            else:
+                reports = self._run_pool(tasks, workers, progress_callback)
 
             # Stable ordering: riskiest first, so the CLI table leads with the
             # contributor that needs attention.
@@ -258,14 +276,77 @@ class OfficeManager:
         result["duration_seconds"] = round(time.time() - started, 3)
         return result
 
+    @staticmethod
+    def _run_one(task: Dict[str, Any],
+                 agent_progress: Optional[Callable[[str, str, int, int], None]]
+                 ) -> Dict[str, Any]:
+        """Run one agent in this process, forwarding its live stage."""
+        name = str(task.get("contributor", ""))
+        callback = None
+        if agent_progress is not None:
+            def callback(stage: str, done: int, total: int) -> None:
+                try:
+                    agent_progress(name, stage, done, total)
+                except Exception as exc:  # pragma: no cover - user callback
+                    LOGGER.debug("agent progress callback failed: %s", exc)
+        return agent_scan_contributor(
+            path=task.get("path", ""), contributor=task.get("contributor"),
+            agent_id=task.get("agent_id"), max_images=task.get("max_images"),
+            progress_callback=callback).to_dict()
+
+    def _run_threads(self, tasks: List[Dict[str, Any]], workers: int,
+                     progress_callback: Optional[Callable[[str, int, int], None]],
+                     agent_progress: Optional[Callable[[str, str, int, int], None]]
+                     ) -> List[Dict[str, Any]]:
+        """Run every agent concurrently on threads sharing one backbone.
+
+        The backbone is loaded once up front so agents do not race to load it.
+        Detector work (decoding, FFTs, OpenCV, numpy, torch) releases the GIL,
+        so agents genuinely overlap.
+
+        Args:
+            tasks: Prepared agent task dictionaries.
+            workers: Number of agent threads.
+            progress_callback: Optional per-completion callback.
+            agent_progress: Optional live per-agent stage callback.
+
+        Returns:
+            List of agent report dictionaries.
+        """
+        try:
+            from src.analysis.embeddings import get_extractor
+            get_extractor()
+        except Exception as exc:
+            LOGGER.error("backbone warm-up failed (%s); agents will report it", exc)
+
+        reports: List[Dict[str, Any]] = []
+        total = len(tasks)
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent") as pool:
+            futures = {pool.submit(self._run_one, task, agent_progress): task for task in tasks}
+            for done, future in enumerate(as_completed(futures), start=1):
+                task = futures[future]
+                try:
+                    reports.append(future.result(timeout=self.timeout))
+                except Exception as exc:
+                    LOGGER.error("agent crashed on %s: %s", task.get("contributor"), exc)
+                    reports.append(AgentReport(
+                        agent_id=str(task.get("agent_id", "")),
+                        contributor=str(task.get("contributor", "")),
+                        path=str(task.get("path", "")),
+                        status="ERROR", error=str(exc)).to_dict())
+                self._notify(progress_callback, str(task.get("contributor", "")), done, total)
+        return reports
+
     def _run_serial(self, tasks: List[Dict[str, Any]],
-                    progress_callback: Optional[Callable[[str, int, int], None]]
+                    progress_callback: Optional[Callable[[str, int, int], None]],
+                    agent_progress: Optional[Callable[[str, str, int, int], None]] = None
                     ) -> List[Dict[str, Any]]:
         """Run every agent in the current process, one after another.
 
         Args:
             tasks: Prepared agent task dictionaries.
             progress_callback: Optional progress callback.
+            agent_progress: Optional live per-agent stage callback.
 
         Returns:
             List of agent report dictionaries.
@@ -274,7 +355,7 @@ class OfficeManager:
         total = len(tasks)
         for done, task in enumerate(tasks, start=1):
             try:
-                reports.append(agent_scan_dict(task))
+                reports.append(self._run_one(task, agent_progress))
             except Exception as exc:  # pragma: no cover - agent is defensive
                 LOGGER.error("serial agent failed: %s", exc)
                 reports.append(AgentReport(
@@ -369,7 +450,8 @@ def run_office(root: str | Path,
                max_images: Optional[int] = None,
                max_workers: Optional[int] = None,
                parallel: bool = True,
-               progress_callback: Optional[Callable[[str, int, int], None]] = None
+               progress_callback: Optional[Callable[[str, int, int], None]] = None,
+               agent_progress: Optional[Callable[[str, str, int, int], None]] = None
                ) -> Dict[str, Any]:
     """Convenience wrapper running a full multi-agent office scan.
 
@@ -380,13 +462,15 @@ def run_office(root: str | Path,
         max_workers: Optional worker cap override.
         parallel: Whether to use a process pool.
         progress_callback: Optional ``(stage, done, total)`` callback.
+        agent_progress: Optional ``(contributor, stage, done, total)`` callback.
 
     Returns:
         Office result dictionary as described in :meth:`OfficeManager.run`.
     """
     return OfficeManager(max_workers=max_workers).run(
         root, contributors=contributors, max_images=max_images,
-        parallel=parallel, progress_callback=progress_callback)
+        parallel=parallel, progress_callback=progress_callback,
+        agent_progress=agent_progress)
 
 
 __all__ = ["OfficeManager", "run_office"]
