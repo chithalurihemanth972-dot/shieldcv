@@ -132,6 +132,19 @@ def _run_agents(params: Dict[str, Any], progress: ProgressFn) -> Dict[str, Any]:
     return office
 
 
+def report_phase(progress: ProgressFn, stage_id: str) -> ProgressFn:
+    """Forward an engine's sub-stages as one Full Report row.
+
+    The count is held one short of the total so the row never shows ✓ while
+    later sub-stages of the same module are still to come; the next module's
+    first tick (or the end of the run) closes it.
+    """
+    def forward(stage: str, done: int, total: int, detail: Optional[str] = None) -> None:
+        shown = min(int(done or 0), int(total) - 1) if total and total > 0 else done
+        progress(stage_id, shown, total, STAGE_LABELS.get(stage, stage))
+    return forward
+
+
 def _run_report(params: Dict[str, Any], progress: ProgressFn) -> Dict[str, Any]:
     wants_drift = bool(params.get("baseline") and params.get("current"))
     if not any(params.get(k) for k in ("data", "model", "records")) and not wants_drift:
@@ -143,9 +156,7 @@ def _run_report(params: Dict[str, Any], progress: ProgressFn) -> Dict[str, Any]:
     from src.reporting.report_generator import generate_report
 
     def phase(stage_id: str) -> ProgressFn:
-        def forward(stage: str, done: int, total: int, detail: Optional[str] = None) -> None:
-            progress(stage_id, done, total, STAGE_LABELS.get(stage, stage))
-        return forward
+        return report_phase(progress, stage_id)
 
     modules: Dict[str, Dict[str, Any]] = {}
     target: Dict[str, Any] = {}

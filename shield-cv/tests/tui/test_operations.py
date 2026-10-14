@@ -114,3 +114,13 @@ def test_registry_is_consistent():
 def test_full_report_needs_a_module():
     with pytest.raises(ValueError, match="at least one"):
         OPERATIONS_BY_ID["report"].runner({}, lambda *a, **k: None)
+
+
+def test_full_report_phase_never_reports_a_module_complete_mid_module():
+    from src.tui.operations import report_phase
+    seen = []
+    forward = report_phase(lambda *a: seen.append(a), "data")
+    forward("loading", 1, 1)
+    forward("embedding", 10, 10)
+    assert [(s, d, t) for s, d, t, _ in seen] == [("data", 0, 1), ("data", 9, 10)]
+    assert seen[1][3] == "ResNet-18 embeddings"

@@ -27,6 +27,13 @@ from src.utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 
+def stage_eta(done: int, total: int, stage_elapsed: float) -> Optional[float]:
+    """Seconds left in the current stage, from its own pace (``None`` if unknown)."""
+    if total <= 1 or done <= 0 or done >= total or stage_elapsed <= 0:
+        return None
+    return (total - done) * stage_elapsed / done
+
+
 class RunScreen(Screen):
     """Runs one operation in a thread worker and shows what it is really doing."""
 
@@ -43,6 +50,7 @@ class RunScreen(Screen):
         self.status = "running"
         self.error_text = ""
         self._started = time.monotonic()
+        self._stage_started = self._started
         self._last: Optional[tuple] = None
 
     @property
@@ -105,6 +113,7 @@ class RunScreen(Screen):
     def _progress(self, stage: str, done: int, total: int, detail: Optional[str]) -> None:
         self.query_one(StageProgress).update_stage(stage, done, total, detail)
         if self._last is None or self._last[0] != stage:
+            self._stage_started = time.monotonic()
             label = STAGE_LABELS.get(stage, stage)
             self.query_one(RichLog).write(
                 f"[dim]{time.strftime('%H:%M:%S')}[/dim]  {escape(label)}"
@@ -117,10 +126,11 @@ class RunScreen(Screen):
                 "stopping": "Stopping at the next checkpoint…",
                 "failed": "Stopped with an error — r retry · b back · t traceback",
                 "cancelled": "Cancelled.", "finished": "Done."}[self.status]
-        if self.status == "running" and self._last and self._last[2] > 1 and self._last[1] > 0:
-            stage, done, total, _ = self._last
-            rate = done / max(1e-6, elapsed)
-            text += f"   ≈ {max(0.0, (total - done) / rate):.0f}s left in this stage"
+        if self.status == "running" and self._last:
+            _, done, total, _ = self._last
+            left = stage_eta(done, total, time.monotonic() - self._stage_started)
+            if left is not None:
+                text += f"   ≈ {left:.0f}s left in this stage"
         self.query_one("#run-status", Static).update(text)
 
     def _finished(self, outcome: RunOutcome) -> None:

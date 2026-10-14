@@ -182,3 +182,11 @@ async def test_pending_stages_hide_their_bars_until_they_start(tmp_path):
         assert not app.screen.query_one("#stage-embedding").has_class("-pending")
         assert app.screen.query_one("#stage-trigger").has_class("-pending")
         gate.set()
+
+
+def test_stage_eta_uses_time_spent_in_this_stage():
+    from src.tui.screens.run import stage_eta
+    # 10 of 573 done after 2 s *in this stage* -> ~113 s left, regardless of run length.
+    assert round(stage_eta(10, 573, 2.0)) == 113
+    assert stage_eta(0, 573, 2.0) is None
+    assert stage_eta(5, 1, 2.0) is None
