@@ -20,6 +20,9 @@ from src.tui.theme import PALETTE
 from src.tui.visuals import gradient_text
 from src.tui.widgets.stage_progress import StageProgress
 from src.utils.cancel import CancelToken, ScanCancelled
+from src.utils.logger import get_logger
+
+LOGGER = get_logger(__name__)
 
 
 class RunScreen(Screen):
@@ -78,11 +81,18 @@ class RunScreen(Screen):
             outcome = execute(self.spec, self.params, self._progress_from_thread, self.token,
                               getattr(self.app, "reports_dir", None))
         except ScanCancelled:
-            self.app.call_from_thread(self._cancelled)
+            self._ui(self._cancelled)
         except Exception as exc:  # shown in the error panel, never crashes the app
-            self.app.call_from_thread(self._failed, exc, traceback.format_exc())
+            self._ui(self._failed, exc, traceback.format_exc())
         else:
-            self.app.call_from_thread(self._finished, outcome)
+            self._ui(self._finished, outcome)
+
+    def _ui(self, callback: Any, *args: Any) -> None:
+        """Hand a result to the UI thread; a closing app must not fail the worker."""
+        try:
+            self.app.call_from_thread(callback, *args)
+        except Exception as exc:
+            LOGGER.debug("run screen gone before %s: %s", getattr(callback, "__name__", "?"), exc)
 
     def _progress_from_thread(self, stage: str, done: int, total: int,
                               detail: Optional[str]) -> None:
