@@ -36,6 +36,7 @@ goto collect
 :run
 if /i "%CMD%"=="start"      ( python shield.py & goto :eof )
 if /i "%CMD%"=="scan"       ( python run.py scan %ARGS% & goto :eof )
+if /i "%CMD%"=="agents"     ( python run.py office %ARGS% & goto :eof )
 if /i "%CMD%"=="audit"      ( python run.py audit %ARGS% & goto :eof )
 if /i "%CMD%"=="verify"     ( python run.py scan %ARGS% & goto :eof )
 if /i "%CMD%"=="drift"      ( python run.py drift %ARGS% & goto :eof )
@@ -60,6 +61,7 @@ echo  -------------------
 echo  shield                 Open interactive mode
 echo  shield start           Open interactive mode
 echo  shield scan ^<path^>     Scan dataset / model / records
+echo  shield agents ^<root^>  One agent per contributor, in parallel
 echo  shield audit ^<model^>   Audit model for backdoors
 echo  shield verify ^<json^>   Verify provenance chain
 echo  shield drift ^<base^> ^<cur^>  Detect drift

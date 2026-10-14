@@ -38,6 +38,8 @@ def main() -> int:
     Returns:
         Process exit code.
     """
+    from src.utils.stdio import ensure_utf8_stdio
+    ensure_utf8_stdio()
     caller = os.environ.get("SHIELD_CALLER_CWD")
     if caller and len(sys.argv) > 2:
         sys.argv[2:] = [_from_caller(a, Path(caller)) for a in sys.argv[2:]]

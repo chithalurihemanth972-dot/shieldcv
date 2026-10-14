@@ -35,6 +35,9 @@ from rich.table import Table
 from rich.text import Text
 from rich import box
 
+from src.utils.stdio import ensure_utf8_stdio
+
+ensure_utf8_stdio()
 console = Console()
 
 # ── Banner ───────────────────────────────────────────────────────────────────
@@ -65,6 +68,7 @@ def show_menu() -> None:
     table.add_column("Description", style="white")
 
     table.add_row("shield scan",     "Scan a dataset for poison attacks")
+    table.add_row("shield agents",   "One agent per contributor, in parallel")
     table.add_row("shield audit",    "Audit a model for backdoors")
     table.add_row("shield verify",   "Verify inference provenance chain")
     table.add_row("shield drift",    "Detect distribution shift")
@@ -640,6 +644,125 @@ def cmd_demo() -> None:
     os.system(f'"{sys.executable}" demo/run_demo.py {"--quick" if quick else ""}')
 
 
+_AGENT_STAGE_LABEL = {
+    "loading": "loading images", "embedding": "ResNet-18 embedding",
+    "duplicates": "copy-flood check", "trigger": "backdoor-trigger check",
+    "label_flip": "wrong-label check", "ood": "outsider check",
+    "mislabel": "systematic-mislabel check",
+}
+
+
+def cmd_agents() -> None:
+    """One agent per contributor, scanning in parallel, with a live board."""
+    import threading
+    from rich.live import Live
+
+    console.print(Panel("[bold cyan]SHIELD AGENTS[/bold cyan] — one agent per contributor, "
+                        "all running in parallel\n\n"
+                        "  Each agent scans only its own contributor's data, so a vendor\n"
+                        "  who poisons heavily cannot drag the shared baseline toward\n"
+                        "  itself. The meeting room then compares the agents' reports.",
+                        border_style="cyan"))
+    path = _get_input("Dataset root (contains contributor folders)", "demo/data/poisoned")
+    target = _resolve_path(path)
+    if not target.exists():
+        console.print(f"\n  [red]Path not found: {target}[/red]")
+        return
+
+    from src.agents.manager import OfficeManager
+    from src.agents.meeting import MeetingRoom
+
+    manager = OfficeManager()
+    tasks = manager.discover(target)
+    if not tasks:
+        console.print(f"\n  [red]No contributor folders under {target}[/red]")
+        return
+
+    lock = threading.Lock()
+    board: Dict[str, Dict[str, Any]] = {
+        t["contributor"]: {"agent": f"AGENT-{i:02d}", "stage": "waiting", "done": 0,
+                           "total": 0, "report": None}
+        for i, t in enumerate(tasks, start=1)}
+
+    def on_stage(contributor: str, stage: str, done: int, total: int) -> None:
+        with lock:
+            row = board.setdefault(contributor, {"agent": "?", "report": None})
+            row.update(stage=stage, done=done, total=total)
+
+    def on_done(contributor: str, done: int, total: int) -> None:
+        with lock:
+            board.get(contributor, {})["stage"] = "finished"
+
+    def render() -> Table:
+        table = Table(box=box.ROUNDED, border_style="cyan",
+                      title=f"[bold]{len(tasks)} agents working in parallel[/bold]")
+        table.add_column("Agent", style="bold cyan", no_wrap=True)
+        table.add_column("Contributor", style="bold")
+        table.add_column("Doing now")
+        table.add_column("Progress", justify="right")
+        with lock:
+            for name, row in board.items():
+                stage = row.get("stage", "waiting")
+                if stage == "finished":
+                    doing, prog = Text("✓ finished", style="green"), ""
+                else:
+                    doing = Text(_AGENT_STAGE_LABEL.get(stage, stage), style="yellow")
+                    total = row.get("total") or 0
+                    prog = f"{row.get('done', 0)}/{total}" if total > 1 else ""
+                table.add_row(row.get("agent", "?"), name, doing, prog)
+        return table
+
+    console.print()
+    result: Dict[str, Any] = {}
+
+    def work() -> None:
+        result["office"] = manager.run(target, progress_callback=on_done,
+                                       agent_progress=on_stage)
+
+    worker = threading.Thread(target=work, daemon=True)
+    started = time.time()
+    worker.start()
+    with Live(render(), console=console, refresh_per_second=8) as live:
+        while worker.is_alive():
+            live.update(render())
+            worker.join(0.12)
+        live.update(render())
+    office = result.get("office") or {}
+    elapsed = time.time() - started
+
+    reports = office.get("reports") or []
+    table = Table(box=box.HEAVY_EDGE, border_style="cyan", title="[bold]AGENT REPORTS[/bold]")
+    table.add_column("Agent", style="bold")
+    table.add_column("Contributor")
+    table.add_column("Risk", justify="right")
+    table.add_column("Images", justify="right")
+    table.add_column("Findings", justify="right")
+    table.add_column("Verdict")
+    for report in reports:
+        risk = float(report.get("risk_score", 0.0) or 0.0)
+        style = "bold red" if risk >= 0.75 else "bold yellow" if risk >= 0.45 else "green"
+        table.add_row(str(report.get("agent_id", "")), str(report.get("contributor", "")),
+                      Text(f"{risk:.3f}", style=style), str(report.get("num_samples", 0)),
+                      str(report.get("num_findings", 0)), str(report.get("verdict", "?")))
+    console.print(table)
+    console.print(f"  [dim]{office.get('agents', 0)} agents · {office.get('mode', '?')} mode · "
+                  f"{elapsed:.1f}s[/dim]")
+    for error in office.get("errors") or []:
+        console.print(f"  [red]! {error}[/red]")
+
+    console.print()
+    console.print("  [bold]Meeting room:[/bold] agents compare notes ...")
+    meeting = MeetingRoom().convene(office)
+    console.print(Panel(str(meeting.get("narrative", "")), title="Meeting room",
+                        border_style="magenta"))
+    for recommendation in meeting.get("recommendations") or []:
+        console.print(Text(f"  → {recommendation}", style="bold"))
+    verdict = str(meeting.get("verdict", "UNKNOWN"))
+    v_style = {"COMPROMISED": "bold white on red", "SUSPICIOUS": "bold dark_orange",
+               "CAUTION": "bold yellow", "CLEAN": "bold white on green"}.get(verdict.upper(), "white")
+    console.print(Text.assemble("\n  Office verdict: ", Text(f" {verdict} ", style=v_style)))
+
+
 def cmd_dashboard() -> None:
     """Open the Streamlit dashboard."""
     console.print(Panel("[bold green]SHIELD DASHBOARD[/bold green] — Opening GUI...",
@@ -696,6 +819,7 @@ def main() -> int:
 
     commands = {
         "scan":      cmd_scan,
+        "agents":    cmd_agents,
         "audit":     cmd_audit,
         "verify":    cmd_verify,
         "drift":     cmd_drift,
