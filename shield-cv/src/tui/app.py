@@ -101,8 +101,17 @@ class ShieldApp(App):
 
     # -- navigation --------------------------------------------------------
     def go_home(self) -> None:
+        """Back to Home, but never past a check that is still running."""
         while len(self.screen_stack) > 1 and not isinstance(self.screen, HomeScreen):
+            if getattr(self.screen, "busy", False):
+                break
             self.pop_screen()
+
+    def check_action(self, action: str, parameters: tuple) -> Optional[bool]:
+        # No palette while a check runs: it could start a second engine or bury the run.
+        if action == "command_palette" and self.busy:
+            return False
+        return super().check_action(action, parameters)
 
     def open_operation(self, op_id: str) -> None:
         from src.tui.screens.operation import OperationScreen

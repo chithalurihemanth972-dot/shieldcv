@@ -94,6 +94,7 @@ class AgentsScreen(Screen):
         self.status = "finished" if result is not None else "running"
         self.cards: Dict[str, AgentCard] = {}
         self.meeting_text = ""
+        self._leave_when_on_top = False
 
     @property
     def busy(self) -> bool:
@@ -198,7 +199,15 @@ class AgentsScreen(Screen):
     def _cancelled(self) -> None:
         self.status = "cancelled"
         self.app.notify("Agents cancelled — nothing was saved.")
-        self.app.pop_screen()
+        if self.app.screen is self:
+            self.app.pop_screen()
+        else:  # a dialog is on top: leave once it closes
+            self._leave_when_on_top = True
+
+    def on_screen_resume(self) -> None:
+        if self._leave_when_on_top:
+            self._leave_when_on_top = False
+            self.call_later(self.app.pop_screen)
 
     def _failed(self, message: str, trace: str) -> None:
         self.status = "failed"

@@ -217,3 +217,48 @@ def test_quitting_does_not_wait_for_a_busy_engine(tmp_path):
         assert time.monotonic() - started < 10
     finally:
         gate.set()
+
+
+@async_test
+async def test_run_finishing_under_an_open_dialog_waits_for_it(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        await pilot.press("escape")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+        gate.set()
+        await pilot.pause(0.5)
+        assert type(app.screen).__name__ == "ConfirmModal"  # the question is not swallowed
+        await pilot.press("n")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ResultsScreen")
+        assert not any(isinstance(s, RunScreen) for s in app.screen_stack)
+
+
+@async_test
+async def test_palette_and_go_home_respect_a_running_check(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        assert app.check_action("command_palette", ()) is False
+        app.go_home()
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, RunScreen)
+        gate.set()
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ResultsScreen")
+        assert app.check_action("command_palette", ()) is not False

@@ -52,6 +52,7 @@ class RunScreen(Screen):
         self._started = time.monotonic()
         self._stage_started = self._started
         self._last: Optional[tuple] = None
+        self._deferred: Optional[tuple] = None  # navigation waiting for a dialog to close
 
     @property
     def busy(self) -> bool:
@@ -134,14 +135,34 @@ class RunScreen(Screen):
         if outcome.save_error:
             self.app.notify(f"Report not saved: {outcome.save_error}", severity="error",
                             timeout=8)
-        self.app.show_result(self.spec.id, outcome.result, outcome.report_path,
-                             outcome.elapsed, replace=True)
+        self._navigate("results", outcome)
 
     def _cancelled(self) -> None:
         self.status = "cancelled"
         self.query_one(StageProgress).finish(ok=False)
         self.app.notify("Check cancelled — nothing was saved.")
-        self.app.pop_screen()
+        self._navigate("back", None)
+
+    def _navigate(self, where: str, outcome: Optional[RunOutcome]) -> None:
+        """Leave this screen — but only while it is on top.
+
+        ``switch_screen``/``pop_screen`` act on the top of the stack; if a dialog,
+        the palette or the too-small notice is showing, wait until it closes.
+        """
+        if self.app.screen is not self:
+            self._deferred = (where, outcome)
+            return
+        self._deferred = None
+        if where == "results" and outcome is not None:
+            self.app.show_result(self.spec.id, outcome.result, outcome.report_path,
+                                 outcome.elapsed, replace=True)
+        else:
+            self.app.pop_screen()
+
+    def on_screen_resume(self) -> None:
+        if self._deferred is not None:
+            where, outcome = self._deferred
+            self.call_later(self._navigate, where, outcome)
 
     def _failed(self, exc: Exception, trace: str) -> None:
         self.status = "failed"
