@@ -243,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         elif self.path == "/api/state":
             with LOCK:
+                if STATE["baseline"] is None:
+                    self._json({"status": STATE["status"], "error": STATE["error"]})
+                    return
                 self._json({"classes": class_names(), "images": list_images(),
                             "status": STATE["status"], "attacked": STATE["attacked"],
                             "baseline": STATE["baseline"], "result": STATE["result"],
@@ -302,8 +305,42 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 
-def main() -> None:
+def prepare() -> None:
+    """Load the backbone and run the baseline scan. Raises on failure."""
     global EXTRACTOR, KEYS
+    reset_workspace()
+    EXTRACTOR = get_extractor()
+    if not EXTRACTOR.available:
+        raise RuntimeError("ResNet-18 unavailable: " + "; ".join(EXTRACTOR.warnings))
+    KEYS = SigningKeyPair.load_or_create()
+    scan_thread(is_baseline=True)
+    if STATE["status"] == "error":
+        raise RuntimeError("baseline scan failed: " + str(STATE["error"]))
+
+
+def start_in_background(port: int = 8765) -> ThreadingHTTPServer:
+    """Bind the server now and prepare + serve on a daemon thread.
+
+    Used by the Streamlit dashboard. The port is bound immediately so the page
+    can be embedded at once; it shows "starting" until the baseline scan is done.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+    def run() -> None:
+        try:
+            prepare()
+        except Exception as exc:
+            logging.exception("attack lab prepare failed")
+            with LOCK:
+                STATE["status"] = "error"
+                STATE["error"] = str(exc)
+        server.serve_forever()
+
+    threading.Thread(target=run, daemon=True, name="attack-lab").start()
+    return server
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
@@ -312,16 +349,11 @@ def main() -> None:
     logging.disable(logging.INFO)
     print("SHIELD-CV Attack Lab")
     print(f"  workspace: {WORK}  (copy of {SOURCE.relative_to(ROOT)})")
-    reset_workspace()
-    print("  loading frozen ResNet-18 ...")
-    EXTRACTOR = get_extractor()
-    if not EXTRACTOR.available:
-        sys.exit("ResNet-18 unavailable: " + "; ".join(EXTRACTOR.warnings))
-    KEYS = SigningKeyPair.load_or_create()
-    print("  baseline scan of the clean dataset ...")
-    scan_thread(is_baseline=True)
-    if STATE["status"] == "error":
-        sys.exit("baseline scan failed: " + str(STATE["error"]))
+    print("  loading frozen ResNet-18 + baseline scan of the clean dataset ...")
+    try:
+        prepare()
+    except RuntimeError as exc:
+        sys.exit(str(exc))
     s = STATE["baseline"]["summary"]
     print(f"  baseline: {s.get('verdict')} (risk {s.get('risk_score', 0):.2f})")
 

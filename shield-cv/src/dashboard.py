@@ -1,8 +1,9 @@
 """SHIELD-CV Streamlit operations dashboard.
 
-A dark, military-styled console over the same engines the CLI drives. Five
-tabs mirror the assurance workflow:
+A dark, military-styled console over the same engines the CLI drives. The
+first tab is the live jury demo; the other five mirror the assurance workflow:
 
+* **LIVE ATTACK LAB** — judges poison an image and watch the pipeline catch it
 * **DATA SCANNER**  — contributor dataset integrity
 * **MODEL AUDIT**   — weight, backdoor and behavioural analysis
 * **CRYPTO LOCK**   — provenance chain with a live, editable tamper demo
@@ -857,8 +858,48 @@ def tab_threat_story() -> None:
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
+ATTACK_LAB_PORT = 8765
+
+
+@st.cache_resource(show_spinner=False)
+def _attack_lab_server() -> Optional[str]:
+    """Start the Attack Lab once per dashboard process.
+
+    Returns:
+        ``None`` on success, or an error message. A port already in use means a
+        standalone ``demo/attack_lab.py`` is running, which the tab reuses.
+    """
+    try:
+        from demo.attack_lab import start_in_background
+        start_in_background(ATTACK_LAB_PORT)
+        return None
+    except OSError:
+        return None  # already serving on this port
+    except Exception as exc:
+        LOGGER.error("Attack Lab failed to start: %s", exc)
+        return f"{type(exc).__name__}: {exc}"
+
+
+def tab_attack_lab() -> None:
+    """Live jury demo: judges poison an image and watch the pipeline catch it."""
+    st.markdown("Pick any image, change its label, launch the attack. The architecture "
+                "below lights up stage by stage while the real engine rescans. "
+                "Works on a scratch copy; the original dataset is never touched.")
+    error = _attack_lab_server()
+    if error:
+        st.error(f"Attack Lab could not start: {error}")
+        return
+    url = f"http://127.0.0.1:{ATTACK_LAB_PORT}/"
+    st.caption(f"Full screen for the jury: [{url}]({url})")
+    if hasattr(st, "iframe"):
+        st.iframe(url, height=1500)
+    else:  # Streamlit < 1.5x
+        import streamlit.components.v1 as components
+        components.iframe(url, height=1500, scrolling=True)
+
+
 def main() -> None:
-    """Configure the page and render all five tabs."""
+    """Configure the page and render all tabs."""
     st.set_page_config(page_title="SHIELD-CV", page_icon="🛡",
                        layout="wide", initial_sidebar_state="expanded")
     st.markdown(DARK_CSS, unsafe_allow_html=True)
@@ -890,9 +931,9 @@ def main() -> None:
                 del st.session_state[key]
             st.rerun()
 
-    tabs = st.tabs(["DATA SCANNER", "MODEL AUDIT", "CRYPTO LOCK",
+    tabs = st.tabs(["🎯 LIVE ATTACK LAB", "DATA SCANNER", "MODEL AUDIT", "CRYPTO LOCK",
                     "DRIFT MONITOR", "THREAT STORY"])
-    renderers = (tab_data_scanner, tab_model_audit, tab_crypto_lock,
+    renderers = (tab_attack_lab, tab_data_scanner, tab_model_audit, tab_crypto_lock,
                  tab_drift_monitor, tab_threat_story)
     for tab, renderer in zip(tabs, renderers):
         with tab:

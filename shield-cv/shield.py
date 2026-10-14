@@ -92,6 +92,10 @@ def _resolve_path(raw: str) -> Path:
     p = Path(cleaned)
     if p.is_absolute():
         return p
+    # shield.bat cd's into ROOT; prefer the folder the user typed `shield` in.
+    caller = os.environ.get("SHIELD_CALLER_CWD")
+    if caller and (Path(caller) / p).exists():
+        return Path(caller) / p
     return ROOT / p
 
 def _timestamp() -> str:

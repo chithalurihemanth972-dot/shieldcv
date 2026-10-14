@@ -204,7 +204,17 @@ const pill = l => `<span class="lbl" style="background:${HEX[l]||'#64748b'}">${e
 const imgUrl = (c,n) => `/img/${c}/${n}?t=${S.attacked.length}`;
 
 async function load(){
-  S = {...S, ...(await api("/api/state"))};
+  let st;
+  try { st = await api("/api/state"); } catch { st = {status:"starting"}; }
+  if (st.status === "starting" || !st.baseline){
+    $("#status").textContent = "warming up…";
+    $("#caption").innerHTML = st.status === "error"
+      ? `<span class='k' style='color:var(--red)'>Startup failed.</span> ${esc(st.error || "")}`
+      : "<span class='k'>Warming up.</span> Loading the frozen ResNet-18 and scanning the clean dataset once as a baseline (~20 s)…";
+    if (st.status !== "error") setTimeout(load, 2000);
+    return;
+  }
+  S = {...S, ...st};
   $("#status").textContent = `${S.images.length} images · backbone ${S.backbone?.status || "?"} · frozen`;
   renderTabs(); renderGallery(); renderResults(S.result, false);
   if (S.status === "running") poll();
