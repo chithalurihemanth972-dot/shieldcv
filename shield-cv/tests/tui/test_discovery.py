@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from src.tui.discovery import (build_asset_index, classify, discover, resolve_asset)
+from src.tui.discovery import (build_asset_index, classify, discover, resolve_asset,
+                                resolve_assets)
 
 
 def _touch(path: Path, data: bytes = b"x") -> Path:
@@ -109,3 +110,14 @@ def test_resolve_asset_by_name(tree: Path):
         root / "contributor_b" / "images" / "b1.png"
     assert resolve_asset("nope.jpg", index, root) is None
     assert build_asset_index(None) == {}
+
+
+def test_same_file_name_in_two_contributors_resolves_by_contributor(tmp_path: Path):
+    root = tmp_path / "ds"
+    a = _touch(root / "contributor_a" / "images" / "IMG_0001.jpg")
+    b = _touch(root / "contributor_b" / "images" / "IMG_0001.jpg")
+    index = build_asset_index(root)
+    assert resolve_asset("IMG_0001.jpg", index, root, contributor="contributor_b") == b
+    assert resolve_asset("IMG_0001.jpg", index, root, contributor="contributor_a") == a
+    assert resolve_asset("IMG_0001.jpg", index, root) is None  # ambiguous: never guess
+    assert sorted(resolve_assets("IMG_0001.jpg", index, root)) == sorted([a, b])

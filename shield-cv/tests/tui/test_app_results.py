@@ -170,3 +170,36 @@ async def test_detail_shown_before_mount_is_applied_once_ready(tmp_path):
     async with Host().run_test() as pilot:
         await wait_for(pilot, lambda: "early bird" in detail.text)
         assert "early bird" in str(detail.query_one("#detail-body").render())
+
+
+@async_test
+async def test_full_report_findings_get_image_previews(tmp_path):
+    root = _dataset(tmp_path)
+    data = _result(root)
+    report = {"schema_version": "1", "target": {"dataset": str(root), "model": "m.pt"},
+              "summary": data["summary"], "findings": data["findings"], "modules": {}}
+    app = _app(tmp_path)
+    async with app.run_test(size=(140, 44)) as pilot:
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "HomeScreen")
+        app.show_result("report", report, None)
+        await wait_for(pilot, lambda: isinstance(app.screen, ResultsScreen))
+        preview = app.screen.query_one(ImagePreview)
+        await wait_for(pilot, lambda: bool(preview.shown_paths))
+        assert preview.shown_paths == [root / "contributor_a" / "images" / "a1.png"]
+
+
+@async_test
+async def test_ambiguous_asset_name_says_so_instead_of_guessing(tmp_path):
+    root = _dataset(tmp_path)
+    other = root / "contributor_b" / "images"
+    other.mkdir(parents=True)
+    Image.new("RGB", (32, 32), (30, 200, 30)).save(other / "a1.png")
+    result = _result(root)
+    result["findings"][1]["evidence"] = {"patch_energy": 9.1}
+    app = _app(tmp_path)
+    async with app.run_test(size=(140, 44)) as pilot:
+        screen = await _open(pilot, app, result)
+        preview = screen.query_one(ImagePreview)
+        await wait_for(pilot, lambda: bool(preview.messages))
+        assert preview.shown_paths == []
+        assert "ambiguous" in preview.messages[0]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.markup import escape
 from rich.table import Table
@@ -14,7 +14,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Digits, Footer, Label, Static, TabbedContent, TabPane
 
-from src.tui.discovery import IMAGE_EXTS, build_asset_index, resolve_asset
+from src.tui.discovery import IMAGE_EXTS, build_asset_index, resolve_assets
 from src.tui.operations import save_report
 from src.tui.screens.modals import BrowseModal
 from src.tui.system import open_path
@@ -45,11 +45,14 @@ class ResultsScreen(Screen):
         self.elapsed = elapsed
         self.head = headline(op_id, result)
         self.severity_filter: Optional[str] = None
-        self._index: Dict[str, Path] = {}
+        self._index: Dict[str, List[Path]] = {}
         self._base = self._dataset_root()
 
     def _dataset_root(self) -> Optional[Path]:
-        raw = (self.result.get("dataset") or {}).get("root") or self.result.get("target")
+        target = self.result.get("target")
+        if isinstance(target, dict):  # full report: {"dataset": ..., "model": ...}
+            target = target.get("dataset")
+        raw = (self.result.get("dataset") or {}).get("root") or target
         if isinstance(raw, str) and raw and Path(raw).is_dir():
             return Path(raw)
         return None
@@ -155,30 +158,37 @@ class ResultsScreen(Screen):
         except Exception:  # screen closed before the index finished
             pass
 
-    def _index_ready(self, index: Dict[str, Path]) -> None:
+    def _index_ready(self, index: Dict[str, List[Path]]) -> None:
         self._index = index
         table = self.query(FindingsTable).first(None)
         if table is not None:
             self._show_detail(table.current())
 
-    def _assets(self, finding: Optional[Dict[str, Any]]) -> List[Path]:
+    def _assets(self, finding: Optional[Dict[str, Any]]) -> Tuple[List[Path], List[str]]:
+        """Images for ``finding`` plus notes for names that could not be pinned down."""
         if not finding:
-            return []
+            return [], []
         names = [str(finding.get("affected_asset") or "")]
         names += [str(n) for n in (finding.get("evidence") or {}).get("member_files") or []]
+        contributor = finding.get("contributor")
         paths: List[Path] = []
-        for name in names:
+        notes: List[str] = []
+        for name in dict.fromkeys(names):
             if Path(name).suffix.lower() not in IMAGE_EXTS:
                 continue
-            hit = resolve_asset(name, self._index, self._base)
-            if hit is not None and hit not in paths:
-                paths.append(hit)
-        return paths[:3]
+            matches = resolve_assets(name, self._index, self._base,
+                                     str(contributor) if contributor else None)
+            if len(matches) == 1 and matches[0] not in paths:
+                paths.append(matches[0])
+            elif len(matches) > 1:
+                notes.append(f"ambiguous name {Path(name).name} — {len(matches)} files match")
+        return paths[:3], notes
 
     def _show_detail(self, finding: Optional[Dict[str, Any]]) -> None:
         detail = self.query(FindingDetail).first(None)
         if detail is not None and detail.is_mounted:
-            detail.show(finding, self._assets(finding))
+            paths, notes = self._assets(finding)
+            detail.show(finding, paths, notes)
 
     def on_findings_table_focused(self, message: FindingsTable.Focused) -> None:
         self._show_detail(message.finding)
@@ -194,7 +204,7 @@ class ResultsScreen(Screen):
         self.notify(f"Showing {self.severity_filter or 'all'} findings", timeout=2)
 
     def action_open_asset(self) -> None:
-        assets = self._assets(self.query_one(FindingsTable).current())
+        assets, _ = self._assets(self.query_one(FindingsTable).current())
         target = assets[0] if assets else self.report_path
         if target is None:
             self.notify("Nothing to open for this finding.", severity="warning")

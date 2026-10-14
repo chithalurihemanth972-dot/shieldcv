@@ -255,28 +255,46 @@ def discover(kind: str, roots: Optional[Sequence[Path]] = None,
     return found
 
 
-def build_asset_index(root: Optional[Path], cap: int = 50000) -> Dict[str, Path]:
-    """Map image file name → path under ``root`` (first hit wins)."""
-    index: Dict[str, Path] = {}
+def build_asset_index(root: Optional[Path], cap: int = 50000) -> Dict[str, List[Path]]:
+    """Map image file name → every path under ``root`` with that name."""
+    index: Dict[str, List[Path]] = {}
     if root is None or not Path(root).is_dir():
         return index
+    count = 0
     for folder, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
         for name in files:
             if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
-                index.setdefault(name, Path(folder) / name)
-                if len(index) >= cap:
+                index.setdefault(name, []).append(Path(folder) / name)
+                count += 1
+                if count >= cap:
                     return index
     return index
 
 
-def resolve_asset(name: str, index: Mapping[str, Path], base: Optional[Path]) -> Optional[Path]:
-    """Turn a finding's ``affected_asset`` (often a bare file name) into a real path."""
+def resolve_assets(name: str, index: Mapping[str, List[Path]], base: Optional[Path],
+                   contributor: Optional[str] = None) -> List[Path]:
+    """Every file a finding's ``affected_asset`` could mean, narrowed by contributor.
+
+    Contributors often share naming schemes (``IMG_0001.jpg``), so a bare name
+    can match several files; the finding's contributor picks the right one.
+    """
     if not name:
-        return None
+        return []
     candidate = Path(name)
     if candidate.is_absolute() and candidate.is_file():
-        return candidate
-    if base is not None and (Path(base) / candidate).is_file():
-        return Path(base) / candidate
-    return index.get(candidate.name)
+        return [candidate]
+    if base is not None and len(candidate.parts) > 1 and (Path(base) / candidate).is_file():
+        return [Path(base) / candidate]
+    matches = list(index.get(candidate.name, []))
+    if contributor and len(matches) > 1:
+        mine = [p for p in matches if contributor in p.parts]
+        matches = mine or matches
+    return matches
+
+
+def resolve_asset(name: str, index: Mapping[str, List[Path]], base: Optional[Path],
+                  contributor: Optional[str] = None) -> Optional[Path]:
+    """The one file ``name`` refers to, or ``None`` if missing or ambiguous."""
+    matches = resolve_assets(name, index, base, contributor)
+    return matches[0] if len(matches) == 1 else None

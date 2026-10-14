@@ -92,15 +92,16 @@ class FindingDetail(VerticalScroll):
 
     def on_mount(self) -> None:
         if self._pending is not None:
-            finding, assets = self._pending
+            finding, assets, notes = self._pending
             self._pending = None
-            self.show(finding, assets)
+            self.show(finding, assets, notes)
 
-    def show(self, finding: Optional[Dict[str, Any]], assets: Sequence[Path]) -> None:
+    def show(self, finding: Optional[Dict[str, Any]], assets: Sequence[Path],
+             notes: Sequence[str] = ()) -> None:
         if not self.query("#detail-body"):
             # Called before our children exist (the table can announce its first
             # row first): keep the latest request and apply it on mount.
-            self._pending = (finding, list(assets))
+            self._pending = (finding, list(assets), list(notes))
             self.text = "\n".join([str((finding or {}).get("finding_id", "")),
                                    str((finding or {}).get("reason", ""))])
             return
@@ -137,4 +138,4 @@ class FindingDetail(VerticalScroll):
                 table.add_row(str(key), escape(shown[:160]))
             parts.append(table)
         evidence_view.update(Group(*parts))
-        self.query_one(ImagePreview).show(list(assets))
+        self.query_one(ImagePreview).show(list(assets), notes)

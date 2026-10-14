@@ -29,10 +29,14 @@ class ImagePreview(Vertical):
         self.shown_paths: List[Path] = []
         self.messages: List[str] = []
 
-    def show(self, paths: Sequence[Path]) -> None:
-        """Replace the preview with ``paths`` (empty hides it)."""
+    def show(self, paths: Sequence[Path], notes: Sequence[str] = ()) -> None:
+        """Replace the preview with ``paths``; ``notes`` explain images not shown."""
         self.remove_children()
         self.shown_paths, self.messages = [], []
+        for note in notes:
+            text = f"[preview unavailable: {note}]"
+            self.messages.append(text)
+            self.mount(Static(f"[dim]{escape(text)}[/dim]"))
         if not paths:
             return
         row = Horizontal()
