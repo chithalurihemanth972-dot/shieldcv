@@ -28,7 +28,7 @@ class SplashScreen(Screen):
                 yield Static(id="splash-line")
 
     def on_mount(self) -> None:
-        self._closed = False
+        self._dismissed = False
         self._started = time.monotonic()
         self._timer = self.set_interval(1 / 24, self._tick)
         self._tick()
@@ -54,8 +54,8 @@ class SplashScreen(Screen):
         self._close()
 
     def _close(self) -> None:
-        if self._closed:
+        if self._dismissed:
             return
-        self._closed = True
+        self._dismissed = True
         self._timer.stop()
         self.app.pop_screen()
