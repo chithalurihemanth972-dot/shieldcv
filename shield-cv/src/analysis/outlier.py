@@ -87,6 +87,29 @@ def knn_centroid_outliers(features: np.ndarray,
         effective_k = int(min(max(k, 1), max(matrix.shape[0] - 1, 1)))
         neighbour_indices = np.argsort(distance_matrix, axis=1)[:, :effective_k]
 
+        class_sums = {c: matrix[label_array == c].sum(axis=0) for c in centroids}
+        class_sizes = {c: int(np.sum(label_array == c)) for c in centroids}
+
+        def loo_margin(row: int, own: int) -> Tuple[float, int]:
+            """Relative margin by which a sample is closer to another class.
+
+            Uses its own class centroid *without the sample itself* (a sample
+            pulls its own centroid towards itself). Returns
+            ``(own - nearest_other) / own``: positive means the sample sits
+            nearer another class's centroid than its own label's.
+            """
+            n = class_sizes[own]
+            if n <= 1:
+                return 0.0, own
+            own_centroid = (class_sums[own] - matrix[row]) / (n - 1)
+            own_distance = float(np.linalg.norm(matrix[row] - own_centroid))
+            others = [(float(np.linalg.norm(matrix[row] - c)), k)
+                      for k, c in centroids.items() if k != own]
+            if not others or own_distance <= 1e-12:
+                return 0.0, own
+            other_distance, other_class = min(others)
+            return (own_distance - other_distance) / own_distance, int(other_class)
+
         flagged: List[Dict[str, Any]] = []
         for class_id, centroid in centroids.items():
             positions = np.where(label_array == class_id)[0]
@@ -131,7 +154,10 @@ def knn_centroid_outliers(features: np.ndarray,
                 if not (distance_flag or neighbour_flag):
                     continue
 
+                margin, nearest_other = loo_margin(int(global_index), int(class_id))
                 flagged.append({
+                    "loo_margin": round(margin, 4),
+                    "nearest_other_class": nearest_other,
                     "distance_flag": bool(distance_flag),
                     "neighbour_flag": bool(neighbour_flag),
                     "index": int(global_index),

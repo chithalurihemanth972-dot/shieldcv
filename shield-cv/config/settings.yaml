@@ -77,6 +77,7 @@ data_scanner:
     min_class_size: 8
     knn_disagreement_threshold: 0.60   # >=60% of neighbours must disagree
     knn_majority_threshold: 0.50       # competing class must hold >=50% of them
+    loo_margin_scale: 0.08             # neighbour evidence scaled by how much closer to another class centre
 
   duplicate:
     phash_size: 8

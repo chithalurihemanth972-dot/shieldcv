@@ -65,7 +65,16 @@ class DataIntegrityEngine:
     # Confidence ceiling for a trigger finding supported by only one of the
     # three detection methods. 0.45 keeps it in REVIEW territory (HIGH starts
     # at 0.65), so uncorroborated leads never read as confirmed detections.
-    SINGLE_METHOD_CONFIDENCE_CAP: float = 0.45
+    # A lone trigger method is a lead, not a detection. 0.35 keeps it at LOW:
+    # on real photographs natural texture alone excites the frequency
+    # statistics of a few percent of images in every contributor's data.
+    SINGLE_METHOD_CONFIDENCE_CAP: float = 0.35
+    # A lone localised-patch signal is specific enough to stay a MEDIUM lead.
+    SINGLE_PATCH_CONFIDENCE_CAP: float = 0.45
+    # Agreeing global signals with no localised patch: at most MEDIUM.
+    UNLOCALISED_CONFIDENCE_CAP: float = 0.55
+    # Neighbour-only label conflict for a sample still nearest its own class.
+    NATURAL_OVERLAP_CAP: float = 0.35
 
     def __init__(self, config: Optional[Any] = None,
                  extractor: Optional[Any] = None) -> None:
@@ -482,8 +491,16 @@ class DataIntegrityEngine:
                 # as a detection, and is capped below the HIGH severity cutoff.
                 # Any single detector is scene-dependent: natural high-contrast
                 # texture alone can excite the frequency or spectral statistic.
+                # The localised pasted-patch signal is the one that is specific
+                # to a BadNets-style trigger. The others (global high-frequency
+                # energy, periodic spectral peaks, embedding spectral signature)
+                # are also excited by natural texture in real photographs, so
+                # without the patch they remain leads however many agree.
+                has_patch = "patch_zscore" in evidence
                 if len(signals) == 1:
-                    signals = [min(signals[0], self.SINGLE_METHOD_CONFIDENCE_CAP)]
+                    cap = (self.SINGLE_PATCH_CONFIDENCE_CAP if has_patch
+                           else self.SINGLE_METHOD_CONFIDENCE_CAP)
+                    signals = [min(signals[0], cap)]
                     evidence["uncorroborated_single_signal"] = True
                     evidence["corroboration_rule"] = (
                         "Single detection method only; capped below HIGH severity because "
@@ -493,6 +510,11 @@ class DataIntegrityEngine:
                 confidence = aggregate_risk(signals, method="noisy_or")
                 if len(signals) >= 2:
                     confidence = min(0.99, confidence * 1.05)
+                    if not has_patch:
+                        confidence = min(confidence, self.UNLOCALISED_CONFIDENCE_CAP)
+                        evidence["corroboration_rule"] = (
+                            "Several global signals agree but no localised patch was found; "
+                            "natural texture can excite these, so capped at MEDIUM.")
                 evidence["signals_triggered"] = len(signals)
                 evidence["detector_signals"] = [round(s, 4) for s in signals]
 
@@ -582,6 +604,23 @@ class DataIntegrityEngine:
                 if item.get("distance_flag") and item.get("neighbour_flag"):
                     confidence = min(0.98, confidence + 0.08)
 
+                # Neighbour disagreement alone cannot tell a flipped label from
+                # natural class overlap: on real photographs some grenades
+                # simply look like bottles to an ImageNet backbone, in every
+                # contributor's data. What a flip adds is geometry — the sample
+                # sits nearer ANOTHER class's centre than its own label's
+                # (leave-one-out). Scale the neighbour evidence by that margin,
+                # and demote a neighbour-only flag still inside its own class.
+                margin = float(item.get("loo_margin", 0.0))
+                natural_overlap = False
+                if item.get("neighbour_flag"):
+                    if margin <= 0.0 and not item.get("distance_flag"):
+                        confidence = min(confidence, self.NATURAL_OVERLAP_CAP)
+                        natural_overlap = True
+                    elif margin > 0.0:
+                        scale = float(self.flip_cfg.get("loo_margin_scale", 0.08))
+                        confidence *= float(np.clip(margin / max(scale, 1e-6), 0.35, 1.0))
+
                 assigned = dataset.class_name(item["assigned_class"])
                 suggested = dataset.class_name(item["suggested_class"])
                 reason = (
@@ -592,6 +631,13 @@ class DataIntegrityEngine:
                 if item["label_conflict"]:
                     reason += (f", while {item['suggested_share']:.0%} belong to "
                                f"'{suggested}' — consistent with a flipped label")
+                if margin > 0.0:
+                    reason += (f"; it lies {margin:.0%} closer to the "
+                               f"'{dataset.class_name(item['nearest_other_class'])}' centre "
+                               f"than to its own label's")
+                elif natural_overlap:
+                    reason += ("; it still sits nearer its own label's centre, so this is "
+                               "reported as natural class overlap, not a confirmed flip")
                 self.findings.append(Finding.create(
                     attack_class=AttackClass.LABEL_FLIPPING.value,
                     affected_asset=sample.name,
@@ -608,6 +654,8 @@ class DataIntegrityEngine:
                         "k": outcome["k"],
                         "distance_flag": item.get("distance_flag", False),
                         "neighbour_flag": item.get("neighbour_flag", False),
+                        "loo_margin": round(margin, 4),
+                        "natural_overlap": natural_overlap,
                         "rule": ("distance > mean + 2*std of class centroid distances, "
                                  "OR majority of k nearest neighbours carry a different label"),
                     },
@@ -1076,7 +1124,12 @@ class DataIntegrityEngine:
                 else:
                     unattributed += 1
 
-            weights = {"CRITICAL": 1.0, "HIGH": 0.7, "MEDIUM": 0.4, "LOW": 0.15, "INFO": 0.0}
+            # LOW findings are uncorroborated leads. Real photographs produce a
+            # steady trickle of them in every contributor's data, so they barely
+            # move the noisy-OR and are excluded from density and diversity —
+            # otherwise every honest vendor of real imagery saturates near 0.8.
+            weights = {"CRITICAL": 1.0, "HIGH": 0.7, "MEDIUM": 0.4, "LOW": 0.05, "INFO": 0.0}
+            actionable_levels = {"CRITICAL", "HIGH", "MEDIUM"}
             for name, count in sample_counts.items():
                 items = grouped.get(name, [])
                 # Preserve original display name from the first sample
@@ -1104,10 +1157,12 @@ class DataIntegrityEngine:
                     affected.add(finding.affected_asset)
 
                 confidence_risk = 1.0 - product
-                density = len(items) / max(count, 1)
+                actionable = [f for f in items if f.severity in actionable_levels]
+                density = len(actionable) / max(count, 1)
                 density_risk = float(np.clip(density * 2.0, 0.0, 1.0))
                 types = sorted({f.attack_class for f in items})
-                diversity_risk = float(np.clip((len(types) - 1) / 4.0, 0.0, 1.0))
+                actionable_types = {f.attack_class for f in actionable}
+                diversity_risk = float(np.clip((len(actionable_types) - 1) / 4.0, 0.0, 1.0))
 
                 risk = float(np.clip(
                     0.60 * confidence_risk + 0.25 * density_risk + 0.15 * diversity_risk,
@@ -1120,6 +1175,7 @@ class DataIntegrityEngine:
                     "samples": int(count),
                     "affected_samples": len(affected),
                     "density": round(density, 4),
+                    "actionable_findings": len(actionable),
                     "severity_counts": dict(severity_counts),
                     "confidence_component": round(confidence_risk, 4),
                     "density_component": round(density_risk, 4),

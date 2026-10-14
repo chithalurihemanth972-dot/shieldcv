@@ -42,3 +42,6 @@ coverage/
 *.swp
 .DS_Store
 Thumbs.db
+
+# ---- Raw Wikimedia download pool (rebuild with demo/fetch_checkpoint_data.py) ----
+demo/data/checkpoint_raw/
