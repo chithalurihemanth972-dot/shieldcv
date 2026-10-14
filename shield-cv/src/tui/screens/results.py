@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from rich.markup import escape
 from rich.table import Table
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
@@ -18,6 +17,7 @@ from src.tui.discovery import IMAGE_EXTS, build_asset_index, resolve_assets
 from src.tui.operations import save_report
 from src.tui.screens.modals import BrowseModal
 from src.tui.system import open_path
+from src.tui.threads import deliver, start_daemon
 from src.tui.theme import PALETTE, TONE_COLORS
 from src.tui.verdict import details_rows, headline, risk_tone, target_name
 from src.tui.visuals import banner_text, labelled_bars, risk_gauge, severity_bar
@@ -109,7 +109,7 @@ class ResultsScreen(Screen):
 
     def on_mount(self) -> None:
         self.call_after_refresh(self._focus_table)
-        self._build_index()
+        start_daemon(self._build_index, name="shield-assets")
 
     def _focus_table(self) -> None:
         table = self.query(FindingsTable).first(None)
@@ -150,13 +150,8 @@ class ResultsScreen(Screen):
             table.add_row("[yellow]Limitation[/yellow]", escape(str(limitation)))
         return table
 
-    @work(thread=True, exclusive=True, group="assets")
     def _build_index(self) -> None:
-        index = build_asset_index(self._base)
-        try:
-            self.app.call_from_thread(self._index_ready, index)
-        except Exception:  # screen closed before the index finished
-            pass
+        deliver(self.app, self._index_ready, build_asset_index(self._base))
 
     def _index_ready(self, index: Dict[str, List[Path]]) -> None:
         self._index = index

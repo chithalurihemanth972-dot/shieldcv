@@ -119,3 +119,41 @@ async def test_escape_returns_home(tmp_path):
 def test_default_params():
     assert default_params(OPERATIONS_BY_ID["drift"]) == {"max_images": 120}
     assert default_params(OPERATIONS_BY_ID["audit"]) == {"neural_cleanse": True}
+
+
+@async_test
+async def test_browse_is_offered_while_discovery_is_still_running(tmp_path, monkeypatch):
+    import time as time_module
+    import src.tui.app as app_module
+    real = app_module.discover
+
+    def slow(kind, roots=None):
+        time_module.sleep(1.5)
+        return real(kind, roots)
+
+    monkeypatch.setattr(app_module, "discover", slow)
+    app = _app(tmp_path, [])
+    async with app.run_test(size=(120, 40)) as pilot:
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "HomeScreen")
+        await pilot.press("d")
+        await wait_for(pilot, lambda: isinstance(app.screen, OperationScreen))
+        picker = app.screen.query_one("#target", TargetPicker)
+        options = picker.query_one("OptionList")
+        assert not picker.loaded
+        assert options.get_option_at_index(options.option_count - 1).id == "__browse__"
+
+
+@async_test
+async def test_pickers_share_one_discovery_per_kind(tmp_path, monkeypatch):
+    import src.tui.app as app_module
+    real, calls = app_module.discover, []
+
+    def counting(kind, roots=None):
+        calls.append(kind)
+        return real(kind, roots)
+
+    monkeypatch.setattr(app_module, "discover", counting)
+    app = _app(tmp_path, [])
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open(pilot, app, "r")  # full report: three dataset pickers
+        assert calls.count("dataset") == 1

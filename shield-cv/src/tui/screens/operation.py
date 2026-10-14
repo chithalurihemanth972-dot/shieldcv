@@ -82,7 +82,7 @@ class OperationScreen(Screen):
 
     def problem(self) -> Optional[str]:
         """Why Run is disabled, or ``None`` when ready."""
-        if any(not p.loaded for p in self.query(TargetPicker)):
+        if any(not p.loaded and p.selected is None for p in self.query(TargetPicker)):
             return "Looking for targets…"
         params = self.params()
         if self.spec.target_kind and params.get("target") is None:

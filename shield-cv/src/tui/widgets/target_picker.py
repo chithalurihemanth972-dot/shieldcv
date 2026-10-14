@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -14,8 +13,9 @@ from textual.message import Message
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from src.tui.discovery import Candidate, describe, discover, display_label
+from src.tui.discovery import Candidate, describe, display_label
 from src.tui.screens.modals import KIND_WORDS, BrowseModal
+from src.tui.threads import deliver, start_daemon
 
 NONE_ID = "__none__"
 BROWSE_ID = "__browse__"
@@ -57,19 +57,19 @@ class TargetPicker(Vertical):
     def compose(self) -> ComposeResult:
         yield Input(placeholder="filter…", classes="picker-filter")
         yield OptionList(Option(Text(f"Looking for {KIND_WORDS[self.kind]}…", style="dim"),
-                                disabled=True))
+                                disabled=True),
+                         Option(Text("▸ Browse…", style="bold cyan"), id=BROWSE_ID))
         yield Static("", classes="picker-hint")
 
     def on_mount(self) -> None:
-        self._load()
+        start_daemon(self._load, name=f"shield-discover-{self.kind}")
 
-    @work(thread=True, exclusive=True)
     def _load(self) -> None:
-        found = discover(self.kind, getattr(self.app, "discovery_roots", None))
-        self.app.call_from_thread(self._loaded_candidates, found)
+        deliver(self.app, self._loaded_candidates, self.app.candidates(self.kind))
 
     def _loaded_candidates(self, found: List[Candidate]) -> None:
-        self.candidates = found
+        browsed = {c.path for c in self.candidates}  # anything picked via Browse… meanwhile
+        self.candidates = self.candidates + [c for c in found if c.path not in browsed]
         self._render_options("")
         self._loaded = True
         if not found and not self.optional:

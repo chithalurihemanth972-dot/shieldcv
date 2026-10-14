@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from functools import partial
 from typing import List, Tuple
 
 from textual.command import Hit, Hits, Provider
 
-from src.tui.discovery import discover
 from src.tui.recent import recent_reports
+from src.tui.threads import run_daemon
 
 QUICK = (("scan", "dataset", "Scan"), ("audit", "model", "Audit"), ("verify", "records", "Verify"))
 LAUNCH = (("dashboard", "Launch Streamlit dashboard"), ("lab", "Launch Attack Lab"),
@@ -20,12 +19,11 @@ class ShieldCommands(Provider):
     """Everything the console can do, fuzzy-searchable."""
 
     async def startup(self) -> None:
-        roots = getattr(self.app, "discovery_roots", None)
         self._quick: List[Tuple[str, str, str]] = []
         for op_id, kind, verb in QUICK:
-            found = await asyncio.to_thread(discover, kind, roots)
+            found = await run_daemon(self.app.candidates, kind)
             self._quick += [(op_id, f"{verb} {c.label}", str(c.path)) for c in found]
-        self._recent = await asyncio.to_thread(recent_reports, 5, self.app.reports_dir)
+        self._recent = await run_daemon(recent_reports, 5, self.app.reports_dir)
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)

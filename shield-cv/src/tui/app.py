@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from textual.app import App
 from textual.binding import Binding
@@ -18,7 +19,7 @@ except Exception:  # pragma: no cover - preview falls back to a message
     pass
 
 from src.tui.commands import ShieldCommands
-from src.tui.discovery import ROOT
+from src.tui.discovery import KINDS, ROOT, Candidate, discover
 from src.tui.operations import OPERATIONS_BY_ID, OperationSpec
 from src.tui.recent import load_report
 from src.tui.screens.home import HomeScreen
@@ -58,6 +59,18 @@ class ShieldApp(App):
         self.discovery_roots = list(discovery_roots) if discovery_roots is not None else None
         self.reports_dir = reports_dir
         self.operations: Mapping[str, OperationSpec] = operations or OPERATIONS_BY_ID
+        self._candidates: Dict[str, List[Candidate]] = {}
+        self._candidate_locks = {kind: threading.Lock() for kind in KINDS}
+
+    def candidates(self, kind: str) -> List[Candidate]:
+        """Discovered targets of ``kind``, found once per session and shared.
+
+        Thread-safe: pickers and the command palette call this from worker threads.
+        """
+        with self._candidate_locks[kind]:
+            if kind not in self._candidates:
+                self._candidates[kind] = discover(kind, self.discovery_roots)
+            return list(self._candidates[kind])
 
     # -- lifecycle ---------------------------------------------------------
     def on_mount(self) -> None:

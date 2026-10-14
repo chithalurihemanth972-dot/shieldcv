@@ -190,3 +190,30 @@ def test_stage_eta_uses_time_spent_in_this_stage():
     assert round(stage_eta(10, 573, 2.0)) == 113
     assert stage_eta(0, 573, 2.0) is None
     assert stage_eta(5, 1, 2.0) is None
+
+
+def test_quitting_does_not_wait_for_a_busy_engine(tmp_path):
+    import asyncio
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(25)  # a stage with no progress ticks (e.g. activation clustering)
+        return dict(RESULT)
+
+    async def scenario():
+        app = _app(tmp_path)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.start_run(_spec(runner), {"target": tmp_path})
+            await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+            await pilot.press("q")
+            await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+            await pilot.press("y")
+            await pilot.pause(0.2)
+
+    started = time.monotonic()
+    try:
+        asyncio.run(scenario())
+        assert time.monotonic() - started < 10
+    finally:
+        gate.set()

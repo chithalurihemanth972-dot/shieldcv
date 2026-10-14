@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import List
 
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical
@@ -17,6 +16,7 @@ from textual.widgets.option_list import Option
 
 from src.tui.operations import OPERATIONS
 from src.tui.recent import RecentItem, age_of, recent_reports
+from src.tui.threads import deliver, start_daemon
 from src.tui.theme import PALETTE, TONE_COLORS
 from src.tui.visuals import gradient_text
 from src.tui.widgets.tile import Tile
@@ -64,10 +64,11 @@ class HomeScreen(Screen):
                     style=PALETTE["muted"])
         self.query_one("#home-header", Static).update(line)
 
-    @work(thread=True, exclusive=True, group="recent")
     def _load_recent(self) -> None:
-        items = recent_reports(5, self.app.reports_dir)
-        self.app.call_from_thread(self._show_recent, items)
+        start_daemon(self._recent_worker, name="shield-recent")
+
+    def _recent_worker(self) -> None:
+        deliver(self.app, self._show_recent, recent_reports(5, self.app.reports_dir))
 
     def _show_recent(self, items: List[RecentItem]) -> None:
         recent = self.query_one("#recent", OptionList)

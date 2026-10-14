@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 
 from rich.markup import escape
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Vertical, VerticalScroll
@@ -17,6 +16,7 @@ from textual.widgets import Footer, Static
 
 from src.tui.operations import STAGE_LABELS, OperationSpec, RunOutcome, execute
 from src.tui.screens.modals import ConfirmModal
+from src.tui.threads import deliver, start_daemon
 from src.tui.theme import PALETTE, TONE_COLORS
 from src.tui.discovery import display_label
 from src.tui.verdict import TONE_BY_VERDICT, headline, risk_tone
@@ -119,7 +119,7 @@ class AgentsScreen(Screen):
             return
         self.query_one("#run-status", Static).update("Agents starting…")
         self._discover_cards()
-        self._work()
+        start_daemon(self._work, name="shield-agents")
 
     def _card(self, contributor: str) -> AgentCard:
         if contributor not in self.cards:
@@ -139,7 +139,6 @@ class AgentsScreen(Screen):
         except Exception as exc:  # cards are also created lazily from progress events
             LOGGER.debug("agent pre-discovery failed: %s", exc)
 
-    @work(thread=True, exclusive=True, group="engine")
     def _work(self) -> None:
         try:
             outcome = execute(self.spec, self.params, self._from_thread, self.token,
@@ -152,11 +151,7 @@ class AgentsScreen(Screen):
             self._ui(self._finished, outcome)
 
     def _ui(self, callback: Any, *args: Any) -> None:
-        """Hand a result to the UI thread; a closing app must not fail the worker."""
-        try:
-            self.app.call_from_thread(callback, *args)
-        except Exception as exc:
-            LOGGER.debug("agents screen gone before %s: %s", getattr(callback, "__name__", "?"), exc)
+        deliver(self.app, callback, *args)
 
     def _from_thread(self, stage: str, done: int, total: int, detail: Optional[str]) -> None:
         self.app.call_from_thread(self._progress, stage, done, total, detail)

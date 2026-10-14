@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rich.markup import escape
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -18,6 +17,7 @@ from textual.widgets import Footer, RichLog, Static
 from src.tui.discovery import display_label
 from src.tui.operations import STAGE_LABELS, OperationSpec, RunOutcome, execute
 from src.tui.screens.modals import ConfirmModal
+from src.tui.threads import deliver, start_daemon
 from src.tui.theme import PALETTE
 from src.tui.visuals import gradient_text
 from src.tui.widgets.stage_progress import StageProgress
@@ -84,9 +84,8 @@ class RunScreen(Screen):
         self.remove_class("-failed")
         self.remove_class("-trace")
         self.query_one(RichLog).write(f"[dim]{time.strftime('%H:%M:%S')}[/dim]  started")
-        self._work()
+        start_daemon(self._work, name="shield-engine")
 
-    @work(thread=True, exclusive=True, group="engine")
     def _work(self) -> None:
         try:
             outcome = execute(self.spec, self.params, self._progress_from_thread, self.token,
@@ -99,11 +98,7 @@ class RunScreen(Screen):
             self._ui(self._finished, outcome)
 
     def _ui(self, callback: Any, *args: Any) -> None:
-        """Hand a result to the UI thread; a closing app must not fail the worker."""
-        try:
-            self.app.call_from_thread(callback, *args)
-        except Exception as exc:
-            LOGGER.debug("run screen gone before %s: %s", getattr(callback, "__name__", "?"), exc)
+        deliver(self.app, callback, *args)
 
     def _progress_from_thread(self, stage: str, done: int, total: int,
                               detail: Optional[str]) -> None:
