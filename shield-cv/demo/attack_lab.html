@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SHIELD-CV Attack Lab</title>
+<style>
+:root{
+  --bg:#070b14;--panel:#0e1524;--panel2:#131c30;--line:#1f2b44;--fg:#e6edf7;--muted:#8a9bb8;
+  --cyan:#22d3ee;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--violet:#a78bfa;
+  --c0:#3b82f6;--c1:#22c55e;--c2:#f59e0b;--c3:#a78bfa;--c4:#06b6d4;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 50% -200px,#10223f 0,var(--bg) 60%) fixed;color:var(--fg);
+  font:15px/1.45 "Segoe UI",system-ui,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 24px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{margin:0;font-size:1.35rem;letter-spacing:.5px}
+header h1 span{color:var(--cyan)}
+header p{margin:0;color:var(--muted)}
+button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);padding:8px 14px}
+button:hover{border-color:var(--cyan)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.wrap{padding:16px 24px 40px;max-width:1500px;margin:auto}
+
+/* ── architecture pipeline ── */
+#arch{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px 16px 14px}
+#arch h2{margin:0 0 12px;font-size:.8rem;letter-spacing:2px;color:var(--muted);text-transform:uppercase}
+.pipe{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding-bottom:4px}
+.node{flex:1 1 0;min-width:128px;background:var(--panel2);border:1.5px solid var(--line);border-radius:12px;padding:10px;
+  text-align:center;position:relative;transition:all .35s}
+.node .ic{font-size:1.6rem;line-height:1}
+.node b{display:block;font-size:.9rem;margin-top:4px}
+.node small{display:block;color:var(--muted);font-size:.72rem;margin-top:2px}
+.node .bar{height:4px;background:#0a1020;border-radius:4px;margin-top:8px;overflow:hidden}
+.node .bar i{display:block;height:100%;width:0;background:var(--cyan);transition:width .2s}
+.node.active{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 28px -4px var(--cyan);transform:translateY(-3px)}
+.node.done{border-color:#1d6b47}
+.node.done::after{content:"✓";position:absolute;top:6px;right:9px;color:var(--green);font-weight:700}
+.link{flex:0 0 26px;align-self:center;height:2px;background:var(--line);position:relative;overflow:hidden}
+.link.flow{background:linear-gradient(90deg,var(--line),var(--cyan),var(--line));background-size:200% 100%;animation:flow .7s linear infinite}
+@keyframes flow{from{background-position:100% 0}to{background-position:-100% 0}}
+.detectors{flex:1.7 1 0;min-width:200px;display:flex;flex-direction:column;gap:4px;padding:6px}
+.det{display:flex;align-items:center;gap:8px;text-align:left;padding:5px 8px;border-radius:8px;border:1px solid var(--line);font-size:.78rem;transition:all .3s}
+.det em{font-style:normal;color:var(--muted);font-size:.68rem;margin-left:auto;white-space:nowrap}
+.det.active{border-color:var(--cyan);background:#0b2a36}
+.det.done{border-color:#1d6b47}
+.det.hit{border-color:var(--red);background:#3a1015}
+.det.hit em{color:#fca5a5}
+#caption{margin-top:12px;min-height:44px;padding:10px 14px;border-radius:10px;background:#0a1222;border-left:3px solid var(--cyan);font-size:1.02rem}
+#caption .k{color:var(--cyan);font-weight:600}
+
+/* ── layout ── */
+.grid{display:grid;grid-template-columns:minmax(330px,1fr) minmax(420px,1.35fr);gap:16px;margin-top:16px}
+@media(max-width:1000px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+.card h3{margin:0 0 10px;font-size:.8rem;letter-spacing:2px;color:var(--muted);text-transform:uppercase}
+
+/* gallery */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tabs button{padding:5px 10px;font-size:.82rem}
+.tabs button.on{border-color:var(--cyan);color:var(--cyan)}
+#gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px;max-height:300px;overflow:auto;padding-right:4px}
+.tile{position:relative;border-radius:8px;overflow:hidden;border:2px solid transparent;cursor:pointer;aspect-ratio:1}
+.tile img{width:100%;height:100%;object-fit:cover;display:block}
+.tile i{position:absolute;left:0;right:0;bottom:0;height:4px}
+.tile.sel{border-color:var(--cyan)}
+.tile.poison{border-color:var(--red)}
+.tile.poison::after{content:"☠";position:absolute;top:1px;right:3px;font-size:.8rem}
+
+/* attack panel */
+#attack{display:flex;gap:14px;margin-top:14px;align-items:flex-start;flex-wrap:wrap}
+#attack img{width:128px;height:128px;object-fit:cover;border-radius:10px;border:1px solid var(--line);image-rendering:pixelated}
+#attack .body{flex:1;min-width:200px}
+.lbl{display:inline-block;padding:2px 10px;border-radius:999px;font-size:.8rem;font-weight:600;color:#06101f}
+.choices{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.choices button.on{border-color:var(--red);color:#fecaca;background:#2a0f14}
+.kind{display:flex;gap:6px;margin:6px 0 10px}
+.kind button.on{border-color:var(--amber);color:#fde68a}
+#launch{background:linear-gradient(90deg,#b91c1c,#ef4444);border:none;font-weight:700;padding:11px 18px;font-size:1rem;width:100%}
+#launch:hover{filter:brightness(1.1)}
+.muted{color:var(--muted)}
+
+/* results */
+.verdicts{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.vbox{flex:1;min-width:150px;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center;background:var(--panel2)}
+.vbox small{color:var(--muted);letter-spacing:1px;text-transform:uppercase;font-size:.7rem}
+.vbox .v{font-size:1.5rem;font-weight:800;margin:2px 0}
+.vbox .r{color:var(--muted)}
+.arrow{font-size:1.8rem;color:var(--muted)}
+.V-CLEAN{color:var(--green)}.V-CAUTION{color:var(--amber)}.V-SUSPICIOUS{color:#fb923c}.V-COMPROMISED{color:var(--red)}
+.vbox.alarm{border-color:var(--red);box-shadow:0 0 30px -6px var(--red);animation:pulse 1.2s ease-in-out 3}
+@keyframes pulse{50%{transform:scale(1.04)}}
+#map{width:100%;height:auto;background:#0a1020;border-radius:12px;border:1px solid var(--line);margin-top:12px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:.8rem;color:var(--muted);margin-top:6px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--c);margin-right:5px;vertical-align:-1px}
+.caught{display:flex;gap:12px;margin-top:12px;padding:12px;border-radius:12px;border:1px solid var(--red);background:#1f0c11}
+.caught img{width:84px;height:84px;object-fit:cover;border-radius:8px}
+.caught h4{margin:0;color:#fca5a5;font-size:1.05rem}
+.caught p{margin:4px 0 0;font-size:.85rem}
+.missed{border-color:var(--amber);background:#211807}
+.missed h4{color:#fde68a}
+.risk{display:grid;grid-template-columns:150px 1fr 48px;gap:10px;align-items:center;margin:8px 0;font-size:.9rem}
+.rb{height:12px;background:#0a1020;border-radius:999px;overflow:hidden}
+.rb i{display:block;height:100%;transition:width 1s}
+.chain{font-family:Consolas,monospace;font-size:.75rem;color:var(--muted);word-break:break-all}
+.chain b{color:var(--fg)}
+.blk{border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:6px}
+.blk.new{border-color:var(--violet)}
+#overlay{position:fixed;inset:0;display:none;place-items:center;background:rgba(5,8,15,.82);z-index:9}
+#overlay.show{display:grid}
+#overlay div{text-align:center;font-size:2.4rem;font-weight:900;color:var(--red);text-shadow:0 0 30px var(--red);animation:pop .5s}
+#overlay small{display:block;font-size:1rem;color:var(--fg);font-weight:400;margin-top:8px;text-shadow:none}
+@keyframes pop{from{transform:scale(.6);opacity:0}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>🛡️ SHIELD-CV <span>Attack Lab</span></h1>
+  <p>You are the attacker. Poison any image. Watch SHIELD-CV catch it.</p></div>
+  <div><span id="status" class="muted">loading…</span> &nbsp; <button id="reset">↺ Reset dataset</button></div>
+</header>
+
+<div class="wrap">
+  <section id="arch">
+    <h2>System architecture · live</h2>
+    <div class="pipe">
+      <div class="node" data-stage="loading"><div class="ic">📦</div><b>Contributors</b><small>vendors send images + labels</small><div class="bar"><i></i></div></div>
+      <div class="link"></div>
+      <div class="node" data-stage="embedding"><div class="ic">🧠</div><b>ResNet-18</b><small>frozen · image → 512 numbers</small><div class="bar"><i></i></div></div>
+      <div class="link"></div>
+      <div class="node detectors" data-stage="detectors">
+        <div class="det" data-stage="duplicates" data-det="near_duplicate">📋 Copy flooding<em>pHash + SSIM</em></div>
+        <div class="det" data-stage="trigger" data-det="trigger_injection">🎯 Hidden trigger<em>FFT + SVD</em></div>
+        <div class="det" data-stage="label_flip" data-det="label_flipping">🔄 Wrong label<em>KNN + centroid</em></div>
+        <div class="det" data-stage="ood" data-det="out_of_distribution">👽 Outsider image<em>Mahalanobis + Energy</em></div>
+        <div class="det" data-stage="mislabel" data-det="systematic_mislabeling">🧾 Systematic mislabel<em>Confident learning</em></div>
+      </div>
+      <div class="link"></div>
+      <div class="node" data-stage="aggregate"><div class="ic">⚖️</div><b>Contributor risk</b><small>which vendor is dangerous?</small><div class="bar"><i></i></div></div>
+      <div class="link"></div>
+      <div class="node" data-stage="signing"><div class="ic">🔏</div><b>Signed report</b><small>SHA-256 chain + Ed25519</small><div class="bar"><i></i></div></div>
+      <div class="link"></div>
+      <div class="node" data-stage="done"><div class="ic">🚦</div><b>Verdict</b><small>accept · review · quarantine</small><div class="bar"><i></i></div></div>
+    </div>
+    <div id="caption"><span class="k">Ready.</span> Pick an image below, change its label, and launch the attack.</div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h3>① Choose a victim image</h3>
+      <div class="tabs" id="tabs"></div>
+      <div id="gallery"></div>
+      <div id="attack"><p class="muted">Click any image above.</p></div>
+    </section>
+
+    <section class="card">
+      <h3>② What SHIELD-CV saw</h3>
+      <div class="verdicts">
+        <div class="vbox" id="vBefore"><small>Before attack</small><div class="v">—</div><div class="r"></div></div>
+        <div class="arrow">→</div>
+        <div class="vbox" id="vAfter"><small>After attack</small><div class="v">—</div><div class="r"></div></div>
+      </div>
+      <div id="caught"></div>
+      <svg id="map" viewBox="0 0 640 400"></svg>
+      <div class="legend" id="legend"></div>
+      <h3 style="margin-top:16px">③ Who is responsible?</h3>
+      <div id="risks"></div>
+      <h3 style="margin-top:16px">④ Tamper-proof evidence</h3>
+      <div id="chain" class="chain"></div>
+    </section>
+  </div>
+</div>
+<div id="overlay"><div>⚠ ATTACK DETECTED<small id="ovText"></small></div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const COL = ["var(--c0)","var(--c1)","var(--c2)","var(--c3)","var(--c4)"];
+const HEX = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#06b6d4"];
+const DET_NAME = {trigger_injection:"Hidden trigger",label_flipping:"Wrong label",near_duplicate:"Copy flooding",
+  out_of_distribution:"Outsider image",systematic_mislabeling:"Systematic mislabel"};
+const CAPTION = {
+  loading:"<span class='k'>Loading data.</span> Reading every image and label each contributor submitted.",
+  embedding:"<span class='k'>ResNet-18 is looking.</span> Each image becomes 512 numbers. The network is frozen, so it learns nothing from this data and can't be poisoned by it.",
+  duplicates:"<span class='k'>Copy-flood check.</span> Perceptual hashes catch vendors padding the dataset with near-identical copies.",
+  trigger:"<span class='k'>Backdoor check.</span> Frequency analysis + spectral signatures look for tiny hidden patches that secretly control a model.",
+  label_flip:"<span class='k'>Wrong-label check.</span> If an image's 10 nearest neighbours all disagree with its label, someone lied about it.",
+  ood:"<span class='k'>Outsider check.</span> Mahalanobis distance flags images that don't belong in this mission's data at all.",
+  mislabel:"<span class='k'>Systematic check.</span> Confident learning compares each label against what the evidence says it should be.",
+  aggregate:"<span class='k'>Blame assignment.</span> Findings roll up per contributor, so we know which vendor to investigate.",
+  signing:"<span class='k'>Sealing the evidence.</span> The report is hashed, chained to the previous one and signed with Ed25519. Nobody can edit it later.",
+  done:"<span class='k'>Verdict delivered.</span>"
+};
+const ORDER = ["loading","embedding","duplicates","trigger","label_flip","ood","mislabel","aggregate","signing","done"];
+
+let S = {classes:[],images:[],baseline:null,result:null,attacked:[]};
+let sel = null, newLabel = null, kind = "label", filter = "all", running = false;
+
+async function api(path, body){
+  const r = await fetch(path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
+  return r.json();
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pill = l => `<span class="lbl" style="background:${HEX[l]||'#64748b'}">${esc(S.classes[l] ?? "?")}</span>`;
+const imgUrl = (c,n) => `/img/${c}/${n}?t=${S.attacked.length}`;
+
+async function load(){
+  S = {...S, ...(await api("/api/state"))};
+  $("#status").textContent = `${S.images.length} images · backbone ${S.backbone?.status || "?"} · frozen`;
+  renderTabs(); renderGallery(); renderResults(S.result, false);
+  if (S.status === "running") poll();
+}
+
+function renderTabs(){
+  const cs = ["all", ...new Set(S.images.map(i => i.contributor))];
+  $("#tabs").innerHTML = cs.map(c => `<button class="${c===filter?'on':''}" data-c="${c}">${c==="all"?"All":c.replace("contributor_","")}</button>`).join("");
+  $("#tabs").querySelectorAll("button").forEach(b => b.onclick = () => {filter = b.dataset.c; renderTabs(); renderGallery();});
+}
+function isPoisoned(i){ return S.attacked.some(a => a.image === i.name && a.contributor === i.contributor); }
+function renderGallery(){
+  const list = S.images.filter(i => filter === "all" || i.contributor === filter);
+  $("#gallery").innerHTML = list.map(i =>
+    `<div class="tile ${sel&&sel.name===i.name&&sel.contributor===i.contributor?'sel':''} ${isPoisoned(i)?'poison':''}" data-n="${esc(i.name)}" data-c="${esc(i.contributor)}" title="${esc(i.name)}">
+      <img loading="lazy" src="${imgUrl(i.contributor,i.name)}" alt=""><i style="background:${HEX[i.label]}"></i></div>`).join("");
+  $("#gallery").querySelectorAll(".tile").forEach(t => t.onclick = () => {
+    sel = S.images.find(i => i.name === t.dataset.n && i.contributor === t.dataset.c);
+    newLabel = null; renderGallery(); renderAttack();
+  });
+}
+function renderAttack(){
+  if (!sel){ $("#attack").innerHTML = "<p class='muted'>Click any image above.</p>"; return; }
+  const hit = S.attacked.find(a => a.image === sel.name && a.contributor === sel.contributor);
+  const labelLine = hit
+    ? `label now ${pill(sel.label)} <span class="muted">(really</span> ${pill(hit.old_label)}<span class="muted">)</span>`
+    : `true label ${pill(sel.label)}`;
+  const opts = S.classes.map((c,i) => i===sel.label ? "" :
+    `<button data-l="${i}" class="${newLabel===i?'on':''}">→ ${esc(c)}</button>`).join("");
+  $("#attack").innerHTML = `
+    <img src="${imgUrl(sel.contributor, sel.name)}" alt="">
+    <div class="body">
+      <div><b>${esc(sel.name)}</b><br><span class="muted">${esc(sel.contributor)}</span> · ${labelLine}</div>
+      <div class="kind"><button data-k="label" class="${kind==='label'?'on':''}">🔄 Lie about the label</button>
+        <button data-k="trigger" class="${kind==='trigger'?'on':''}">🎯 Plant hidden trigger + lie</button></div>
+      <div class="muted" style="font-size:.85rem">Relabel it as:</div>
+      <div class="choices">${opts}</div>
+      <button id="launch" ${newLabel===null||running?'disabled':''}>🚀 Launch attack</button>
+    </div>`;
+  $("#attack").querySelectorAll(".choices button").forEach(b => b.onclick = () => {newLabel = +b.dataset.l; renderAttack();});
+  $("#attack").querySelectorAll(".kind button").forEach(b => b.onclick = () => {kind = b.dataset.k; renderAttack();});
+  $("#launch").onclick = launch;
+}
+
+async function launch(){
+  if (!sel || newLabel === null) return;
+  const r = await api("/api/attack", {contributor:sel.contributor, image:sel.name, new_label:newLabel, kind});
+  if (r.error){ alertCaption(r.error); return; }
+  running = true; renderAttack(); resetArch(); $("#caught").innerHTML = "";
+  $("#vAfter").classList.remove("alarm"); setV("#vAfter", null);
+  poll();
+}
+function alertCaption(msg){ $("#caption").innerHTML = `<span class='k' style='color:var(--red)'>Error.</span> ${esc(msg)}`; }
+
+/* ── live pipeline replay: each stage stays visible long enough to narrate ── */
+let shown = 0, queueTimer = null, lastEvents = [], finalPayload = null;
+function resetArch(){
+  shown = 0; lastEvents = []; finalPayload = null; clearTimeout(queueTimer);
+  document.querySelectorAll(".node,.det").forEach(n => n.classList.remove("active","done","hit"));
+  document.querySelectorAll(".node .bar i").forEach(b => b.style.width = "0");
+  document.querySelectorAll(".link").forEach(l => l.classList.remove("flow"));
+}
+function stageEl(st){ return document.querySelector(`.det[data-stage="${st}"]`) || document.querySelector(`.node[data-stage="${st}"]`); }
+function activate(st, ev){
+  const idx = ORDER.indexOf(st);
+  ORDER.slice(0, idx).forEach(p => { const e = stageEl(p); if (e){ e.classList.remove("active"); e.classList.add("done"); const b=e.querySelector(".bar i"); if(b) b.style.width="100%"; }});
+  const det = $(".detectors");
+  const inDet = ["duplicates","trigger","label_flip","ood","mislabel"].includes(st);
+  det.classList.toggle("active", inDet);
+  if (idx > ORDER.indexOf("mislabel")) { det.classList.remove("active"); det.classList.add("done"); }
+  const el = stageEl(st);
+  if (el){ el.classList.add("active"); const b = el.querySelector(".bar i"); if (b && ev) b.style.width = `${Math.round(100*ev.done/Math.max(1,ev.total))}%`; }
+  const links = document.querySelectorAll(".link"); links.forEach(l => l.classList.remove("flow"));
+  const linkIdx = {loading:0,embedding:1,duplicates:2,trigger:2,label_flip:2,ood:2,mislabel:2,aggregate:3,signing:4}[st];
+  if (linkIdx !== undefined && links[linkIdx]) links[linkIdx].classList.add("flow");
+  $("#caption").innerHTML = CAPTION[st] || "";
+  if (st === "embedding" && ev) $("#caption").innerHTML += ` <span class="muted">(${ev.done}/${ev.total})</span>`;
+  if (st === "done"){ el.classList.remove("active"); el.classList.add("done"); }
+}
+function pump(){
+  if (shown < lastEvents.length){
+    const ev = lastEvents[shown];
+    activate(ev.stage, ev);
+    const isLast = shown === lastEvents.length - 1;
+    if (isLast && ev.stage !== "done"){ queueTimer = setTimeout(pump, 250); return; }  // still running: keep updating the live stage
+    shown++;
+    queueTimer = setTimeout(pump, ev.stage === "embedding" ? 900 : 1100);
+  } else if (finalPayload){
+    const p = finalPayload; finalPayload = null; finish(p);
+  } else queueTimer = setTimeout(pump, 250);
+}
+async function poll(){
+  let started = false;
+  const tick = async () => {
+    const p = await api("/api/progress");
+    lastEvents = p.events || [];
+    if (!started){ started = true; pump(); }
+    if (p.status === "running"){ setTimeout(tick, 300); return; }
+    if (p.status === "error"){ running = false; alertCaption(p.error); renderAttack(); return; }
+    finalPayload = p;
+  };
+  tick();
+}
+async function finish(p){
+  running = false;
+  S.attacked = p.attacked; S.result = p.result;
+  const st = await api("/api/state"); S.images = st.images;
+  if (sel) sel = S.images.find(i => i.name === sel.name && i.contributor === sel.contributor);
+  newLabel = null; renderGallery(); renderAttack();
+  renderResults(p.result, true);
+}
+
+/* ── results ── */
+function setV(id, summ){
+  const box = $(id);
+  if (!summ){ box.querySelector(".v").textContent = "…"; box.querySelector(".v").className = "v"; box.querySelector(".r").textContent = "scanning"; return; }
+  box.querySelector(".v").textContent = summ.verdict;
+  box.querySelector(".v").className = "v V-" + summ.verdict;
+  box.querySelector(".r").textContent = `risk ${(+summ.risk_score).toFixed(2)} · ${summ.total_findings} findings`;
+}
+function renderResults(res, animate){
+  if (S.baseline) setV("#vBefore", S.baseline.summary);
+  if (!res) return;
+  const attacked = S.attacked.length > 0;
+  if (attacked) setV("#vAfter", res.summary); else { setV("#vAfter", res.summary); $("#vAfter small").textContent = "Current"; }
+  if (attacked) $("#vAfter small").textContent = "After attack";
+
+  // detectors that fired on the attacked images
+  document.querySelectorAll(".det").forEach(d => d.classList.remove("hit"));
+  const hits = [];
+  S.attacked.forEach(a => (res.findings_by_asset[a.image] || []).forEach(f => hits.push({a, f})));
+  hits.forEach(h => { const d = document.querySelector(`.det[data-det="${h.f.detector}"]`); if (d) d.classList.add("hit"); });
+
+  // caught / missed card for the most recent attack
+  const last = S.attacked[S.attacked.length - 1];
+  if (last){
+    const fs = (res.findings_by_asset[last.image] || []).sort((x,y) => (y.confidence||0)-(x.confidence||0));
+    if (fs.length){
+      const top = fs[0];
+      $("#caught").innerHTML = `<div class="caught"><img src="${imgUrl(last.contributor,last.image)}" alt="">
+        <div><h4>🚨 CAUGHT · ${esc(DET_NAME[top.detector]||top.detector)} · ${esc(top.severity)}</h4>
+        <p>${esc(top.reason)}</p>
+        <p class="muted">Also flagged by: ${fs.slice(1).map(f => esc(DET_NAME[f.detector]||f.detector)).join(", ") || "—"} · traced to <b>${esc(last.contributor)}</b></p></div></div>`;
+      if (animate){
+        $("#vAfter").classList.add("alarm");
+        $("#ovText").textContent = `${last.image} · ${S.classes[last.old_label]} relabelled as ${S.classes[last.new_label]}`;
+        $("#overlay").classList.add("show"); setTimeout(() => $("#overlay").classList.remove("show"), 2200);
+      }
+    } else {
+      $("#caught").innerHTML = `<div class="caught missed"><img src="${imgUrl(last.contributor,last.image)}" alt="">
+        <div><h4>Not flagged at sample level</h4><p>This change looked plausible to the detectors. Check the contributor risk and verdict below.</p></div></div>`;
+    }
+  } else $("#caught").innerHTML = "";
+
+  renderMap(res);
+  renderRisks(res.contributor_risk);
+  renderChain(res.chain_entry);
+}
+function renderMap(res){
+  const pts = res.points; if (!pts?.length) return;
+  const W = 640, H = 400, pad = 26;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const [x0,x1,y0,y1] = [Math.min(...xs),Math.max(...xs),Math.min(...ys),Math.max(...ys)];
+  const sx = x => pad + (x-x0)/(x1-x0||1)*(W-2*pad), sy = y => H-pad - (y-y0)/(y1-y0||1)*(H-2*pad);
+  const victim = new Set(S.attacked.map(a => a.image));
+  let svg = "";
+  pts.forEach(p => { if (!victim.has(p.name)) svg += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4.2" fill="${HEX[p.label]||'#64748b'}" opacity=".8"><title>${esc(p.name)} · ${esc(S.classes[p.label])}</title></circle>`; });
+  pts.forEach(p => { if (p.flagged && !victim.has(p.name)) svg += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="8" fill="none" stroke="#ef4444" stroke-width="1.2" opacity=".55"/>`; });
+  pts.filter(p => victim.has(p.name)).forEach(p => {
+    const cx = sx(p.x), cy = sy(p.y);
+    svg += `<circle cx="${cx}" cy="${cy}" r="9" fill="${HEX[p.label]}" stroke="#fff" stroke-width="2"/>
+      <circle cx="${cx}" cy="${cy}" r="12" fill="none" stroke="#ef4444" stroke-width="3"><animate attributeName="r" values="12;26;12" dur="1.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;.2;1" dur="1.6s" repeatCount="indefinite"/></circle>
+      <text x="${cx > W/2 ? cx-18 : cx+18}" y="${Math.max(cy-16, 34)}" text-anchor="${cx > W/2 ? 'end' : 'start'}" fill="#fecaca" stroke="#0a1020" stroke-width="4" paint-order="stroke" font-size="13" font-weight="700">☠ YOUR ATTACK<tspan x="${cx > W/2 ? cx-18 : cx+18}" dy="15" font-weight="400">labelled "${esc(S.classes[p.label])}" but sits here</tspan></text>`;
+  });
+  $("#map").innerHTML = `<text x="12" y="20" fill="#8a9bb8" font-size="12">Each dot = one image, placed by its 512 ResNet numbers. Same-looking images cluster together.</text>` + svg;
+  $("#legend").innerHTML = S.classes.map((c,i) => `<span style="--c:${HEX[i]}">${esc(c)}</span>`).join("") +
+    `<span style="--c:transparent;outline:1.5px solid #ef4444;border-radius:50%">flagged</span>`;
+}
+function renderRisks(r){
+  const rows = Object.entries(r || {}).sort((a,b) => b[1].risk - a[1].risk);
+  $("#risks").innerHTML = rows.map(([n,e]) => {
+    const c = e.risk >= .6 ? "var(--red)" : e.risk >= .45 ? "var(--amber)" : "var(--green)";
+    return `<div class="risk"><span>${esc(n.replace("contributor_",""))}</span><div class="rb"><i style="width:${Math.round(e.risk*100)}%;background:${c}"></i></div><b>${e.risk.toFixed(2)}</b></div>`;
+  }).join("") || "<p class='muted'>No contributor risk computed.</p>";
+}
+function renderChain(entry){
+  if (!entry) return;
+  $("#chain").innerHTML = `<div class="blk new"><b>Report #${entry.index}</b> · ${esc(entry.time)}<br>
+    hash&nbsp; <b>${esc(entry.hash.slice(0,32))}…</b><br>prev&nbsp; ${esc(entry.prev.slice(0,32))}…<br>
+    sig&nbsp;&nbsp; ${esc(String(entry.signature).slice(0,48))}… <span style="color:var(--green)">✓ Ed25519</span></div>
+    <p class="muted" style="font-family:inherit">Each report is chained to the previous one. Editing any old report breaks every hash after it.</p>`;
+}
+
+$("#reset").onclick = async () => {
+  if (running) return;
+  await api("/api/reset", {}); S.attacked = []; sel = null; resetArch();
+  $("#caption").innerHTML = "<span class='k'>Dataset restored.</span> Pick an image and attack again.";
+  $("#vAfter").classList.remove("alarm"); await load(); renderAttack();
+};
+load();
+</script>
+</body>
+</html>
