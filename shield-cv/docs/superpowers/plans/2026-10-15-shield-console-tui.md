@@ -2319,7 +2319,7 @@ class HomeScreen(Screen):
         with Horizontal(id="home-body"):
             with Grid(id="tiles"):
                 for spec in self.app.operations.values():
-                    yield Tile(spec)
+                    yield Tile(spec, ascii_only=self.app.ascii_only)
             with Vertical(id="home-side"):
                 yield Label("Recent results", classes="section-title")
                 yield OptionList(id="recent")
@@ -2444,6 +2444,7 @@ class ShieldCommands(Provider):
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -2495,6 +2496,8 @@ class ShieldApp(App):
                  operations: Optional[Mapping[str, OperationSpec]] = None) -> None:
         super().__init__()
         self.splash = splash
+        # Set SHIELD_ASCII=1 on consoles whose font lacks the tile glyphs (▣ ◉ ⛓ ⚇).
+        self.ascii_only = os.environ.get("SHIELD_ASCII") == "1"
         self.discovery_roots = list(discovery_roots) if discovery_roots is not None else None
         self.reports_dir = reports_dir
         self.operations: Mapping[str, OperationSpec] = operations or OPERATIONS_BY_ID
@@ -2580,6 +2583,11 @@ class ShieldApp(App):
             if getattr(screen, "is_running", False):
                 return screen
         return None
+
+    @property
+    def is_running(self) -> bool:
+        """Whether any check is in progress."""
+        return self.running_screen() is not None
 
     async def action_quit(self) -> None:
         running = self.running_screen()
@@ -3372,6 +3380,27 @@ async def test_escape_then_no_keeps_running(tmp_path):
 
 
 @async_test
+async def test_quit_during_run_asks_first(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        await pilot.press("q")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+        await pilot.press("n")
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        assert app.is_running
+        gate.set()
+
+
+@async_test
 async def test_error_panel_retry_and_back(tmp_path):
     calls = []
 
@@ -3695,7 +3724,7 @@ and a minimal `src/tui/screens/agents.py` with `class AgentsScreen(Screen): def 
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `python -m pytest tests/tui/test_app_run.py -q`
-Expected: `4 passed`.
+Expected: `5 passed`.
 
 - [ ] **Step 7: Commit**
 
