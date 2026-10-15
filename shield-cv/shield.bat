@@ -9,6 +9,7 @@
 ::   shield audit <path>   -> audit a model
 ::   shield verify <path>  -> verify provenance chain
 ::   shield drift <base> <cur> -> detect drift
+::   shield review <report>   -> approve / reject flagged photos (reject = undoable quarantine)
 ::   shield report [all]   -> full assurance report
 ::   shield demo           -> guided 8-stage demo
 ::   shield dashboard      -> open GUI dashboard
@@ -40,6 +41,7 @@ if /i "%CMD%"=="agents"     ( python run.py office %ARGS% & goto :eof )
 if /i "%CMD%"=="audit"      ( python run.py audit %ARGS% & goto :eof )
 if /i "%CMD%"=="verify"     ( python run.py scan %ARGS% & goto :eof )
 if /i "%CMD%"=="drift"      ( python run.py drift %ARGS% & goto :eof )
+if /i "%CMD%"=="review"     ( python run.py review %ARGS% & goto :eof )
 if /i "%CMD%"=="report"     ( python run.py report %ARGS% & goto :eof )
 if /i "%CMD%"=="demo"       ( python demo\run_demo.py --quick %ARGS% & goto :eof )
 if /i "%CMD%"=="dashboard"  ( python -m streamlit run src\dashboard.py & goto :eof )
@@ -66,6 +68,7 @@ echo  shield agents ^<root^>  One agent per contributor, in parallel
 echo  shield audit ^<model^>   Audit model for backdoors
 echo  shield verify ^<json^>   Verify provenance chain
 echo  shield drift ^<base^> ^<cur^>  Detect drift
+echo  shield review ^<report^>   Approve / reject flagged photos (undoable)
 echo  shield report [all]    Full assurance report
 echo  shield demo            Guided 8-stage demo
 echo  shield dashboard       Open GUI dashboard

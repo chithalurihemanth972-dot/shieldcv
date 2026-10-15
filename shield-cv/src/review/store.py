@@ -67,6 +67,7 @@ class Decision:
     time: str
     moves: List[Dict[str, str]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    contributor: str = ""
 
 
 @dataclass
@@ -159,17 +160,40 @@ class ReviewSession:
                                       "time": time.strftime("%Y-%m-%dT%H:%M:%S")})
 
     # -- status ------------------------------------------------------------------
+    @staticmethod
+    def _same_photo(entry: Mapping[str, Any], finding: Finding) -> bool:
+        """Whether a recorded decision is about the same photo as ``finding``.
+
+        Several detectors often flag one photo. A missing contributor on either
+        side matches; two different contributors never do.
+        """
+        if str(entry.get("asset", "")) != str(finding.get("affected_asset", "")):
+            return False
+        mine, theirs = str(finding.get("contributor") or ""), str(entry.get("contributor") or "")
+        return not mine or not theirs or mine == theirs
+
+    def _decision_key(self, finding: Finding) -> Optional[str]:
+        """The key of the decision that covers ``finding`` (its own, or a rejection of its photo)."""
+        key = finding_key(finding)
+        if key in self._data["decisions"]:
+            return key
+        for other, entry in self._data["decisions"].items():
+            if entry.get("decision") == "REJECTED" and self._same_photo(entry, finding):
+                return other
+        return None
+
     def status(self, finding: Finding) -> str:
         """``"APPROVED"``, ``"REJECTED"`` or ``"pending"``."""
-        entry = self._data["decisions"].get(finding_key(finding))
-        return str(entry["decision"]) if entry else "pending"
+        key = self._decision_key(finding)
+        return str(self._data["decisions"][key]["decision"]) if key else "pending"
 
     def decisions(self) -> Dict[str, Decision]:
         """Every recorded decision, by finding key."""
         return {k: Decision(key=k, finding_id=str(v.get("finding_id", "")),
                             decision=str(v["decision"]), asset=str(v.get("asset", "")),
                             reason=str(v.get("reason", "")), time=str(v.get("time", "")),
-                            moves=list(v.get("moves") or []), warnings=list(v.get("warnings") or []))
+                            moves=list(v.get("moves") or []), warnings=list(v.get("warnings") or []),
+                            contributor=str(v.get("contributor") or ""))
                 for k, v in self._data["decisions"].items()}
 
     # -- resolving a finding to a file ---------------------------------------------
@@ -260,6 +284,7 @@ class ReviewSession:
                     decision="REJECTED", asset=str(finding.get("affected_asset", "")),
                     reason=reason or str(finding.get("reason", ""))[:200],
                     time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    contributor=str(finding.get("contributor") or ""),
                     moves=[{"kind": m.kind, "from": str(m.source.relative_to(self.root)),
                             "to": str(m.dest.relative_to(self.root)),
                             "sha256": hashes[str(m.source)]} for m in moves],
@@ -295,7 +320,8 @@ class ReviewSession:
             decision = Decision(
                 key=finding_key(finding), finding_id=str(finding.get("finding_id", "")),
                 decision="APPROVED", asset=str(finding.get("affected_asset", "")), reason=note,
-                time=time.strftime("%Y-%m-%dT%H:%M:%S"))
+                time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                contributor=str(finding.get("contributor") or ""))
             self._data["decisions"][decision.key] = {
                 k: v for k, v in decision.__dict__.items() if k != "key"}
             self._event("approve", decision.key, decision.finding_id)
@@ -305,7 +331,10 @@ class ReviewSession:
     def undo(self, finding_or_key: Union[Finding, str]) -> Decision:
         """Put a rejected photo back, or clear an approval."""
         with self._lock:
-            key = finding_or_key if isinstance(finding_or_key, str) else finding_key(finding_or_key)
+            if isinstance(finding_or_key, str):
+                key = finding_or_key
+            else:
+                key = self._decision_key(finding_or_key) or finding_key(finding_or_key)
             entry = self._data["decisions"].get(key)
             if not entry:
                 raise ReviewError("nothing to undo for this finding")
@@ -369,8 +398,17 @@ class ReviewSession:
         return [f for f in findings if self._severity(f) in wanted and self.status(f) == "pending"]
 
     def select(self, findings: Iterable[Finding], severities: Sequence[str]) -> List[Finding]:
-        """Undecided findings of the given severities that Reject can act on."""
-        return [f for f in self.pending(findings, severities) if self.can_reject(f)[0]]
+        """Undecided findings of the given severities that Reject can act on (one per photo)."""
+        picked: List[Finding] = []
+        for finding in self.pending(findings, severities):
+            if not self.can_reject(finding)[0]:
+                continue
+            if any(str(p.get("affected_asset")) == str(finding.get("affected_asset"))
+                   and (not p.get("contributor") or not finding.get("contributor")
+                        or p.get("contributor") == finding.get("contributor")) for p in picked):
+                continue
+            picked.append(finding)
+        return picked
 
     def plan_many(self, findings: Iterable[Finding]) -> Plan:
         """What rejecting all of ``findings`` would do, without doing it."""
@@ -393,6 +431,8 @@ class ReviewSession:
         """Reject each finding; one failure never stops the rest."""
         result = BulkResult()
         for finding in findings:
+            if self.status(finding) == "REJECTED":
+                continue  # its photo was already quarantined (by this or an earlier finding)
             try:
                 result.done.append(self.reject(finding, reason))
             except ReviewError as exc:

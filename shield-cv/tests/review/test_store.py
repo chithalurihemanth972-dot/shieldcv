@@ -244,3 +244,34 @@ def test_symlink_rule_is_exercised_even_where_symlinks_cannot_be_created(dataset
     with pytest.raises(ReviewError, match="symbolic link"):
         ReviewSession(dataset).reject(_finding("a2.jpg"))
     assert photo.read_bytes() == b"A2-PIXELS"
+
+
+def test_rejecting_a_photo_marks_every_finding_about_it_rejected(dataset: Path):
+    session = ReviewSession(dataset)
+    trigger = _finding("a2.jpg", attack="TRIGGER_INJECTION", fid="1")
+    flip = _finding("a2.jpg", attack="LABEL_FLIPPING", fid="2")
+    other = _finding("b2.jpg", attack="TRIGGER_INJECTION", fid="3")
+    session.reject(trigger)
+    assert session.status(flip) == "REJECTED" and session.status(other) == "pending"
+    assert session.can_reject(flip) == (False, "already rejected (undo it first)")
+    session.undo(flip)  # undo through the other finding restores the one photo
+    assert (dataset / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"A2-PIXELS"
+    assert session.status(trigger) == "pending" and session.status(flip) == "pending"
+
+
+def test_bulk_selection_counts_each_photo_once_and_reports_no_false_skips(dataset: Path):
+    session = ReviewSession(dataset)
+    findings = [_finding("a2.jpg", attack="TRIGGER_INJECTION", fid="1"),
+                _finding("a2.jpg", attack="LABEL_FLIPPING", fid="2"),
+                _finding("b2.jpg", attack="TRIGGER_INJECTION", fid="3")]
+    picked = session.select(findings, ("CRITICAL",))
+    assert [f["finding_id"] for f in picked] == ["1", "3"]
+    result = session.reject_many(findings)  # even when handed every finding
+    assert [d.finding_id for d in result.done] == ["1", "3"] and result.skipped == []
+    assert all(session.status(f) == "REJECTED" for f in findings)
+
+
+def test_same_name_different_contributor_is_not_treated_as_the_same_photo(dataset: Path):
+    session = ReviewSession(dataset)
+    session.reject(_finding("a1.jpg", contributor="contributor_a"))
+    assert session.status(_finding("a1.jpg", contributor="contributor_b")) == "pending"

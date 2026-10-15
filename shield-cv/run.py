@@ -43,6 +43,9 @@ def main() -> int:
     caller = os.environ.get("SHIELD_CALLER_CWD")
     if caller and len(sys.argv) > 2:
         sys.argv[2:] = [_from_caller(a, Path(caller)) for a in sys.argv[2:]]
+    if len(sys.argv) > 1 and sys.argv[1] == "review":  # approve / reject findings
+        from src.review.cli import main as review_main
+        return review_main()
     from src.cli import main as cli_main
     return cli_main()
 
