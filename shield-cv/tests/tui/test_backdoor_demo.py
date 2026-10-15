@@ -10,7 +10,7 @@ from src.tui.backdoor_demo import build_demo, letter, plain_verdict
 
 @pytest.fixture(scope="module")
 def demo(tmp_path_factory):
-    return build_demo(out_dir=tmp_path_factory.mktemp("bd"))
+    return build_demo(kind="stripe", out_dir=tmp_path_factory.mktemp("bd"))
 
 
 def test_backdoored_model_is_fooled_by_the_patch_and_the_clean_one_is_not(demo):

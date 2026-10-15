@@ -91,3 +91,4 @@ AgentsScreen.-done #meeting { display: block; }
 #demo-body { height: auto; padding: 0 2 1 2; }
 #demo-extra { height: auto; padding: 1 2; }
 BackdoorDemoScreen ImagePreview { padding: 0 2; }
+BackdoorDemoScreen ImagePreview Image { height: 18; }

@@ -20,7 +20,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Static
 
 from src.tui.backdoor_demo import (BACKDOORED_MODEL, CLEAN_MODEL, MODELS_DIR, OUT_DIR,
-                                   DemoData, PlainVerdict, build_demo, letter, plain_verdict)
+                                   DemoData, PlainVerdict, build_demo, plain_verdict)
 from src.tui.operations import OPERATIONS_BY_ID, execute
 from src.tui.screens.modals import ConfirmModal
 from src.tui.theme import PALETTE, TONE_COLORS
@@ -95,14 +95,17 @@ class BackdoorDemoScreen(Screen):
 
     # -- content ---------------------------------------------------------------
     def _labels(self, item: Any, triggered: bool) -> str:
+        demo = self._demo
         clean = item.clean_triggered if triggered else item.clean_normal
         back = item.backdoored_triggered if triggered else item.backdoored_normal
-        head = "Same picture + secret mark" if triggered else f"Truth: Category {letter(item.true_class)}"
-        return f"{head}\nSafe model says: {letter(clean)}\nBackdoored says: {letter(back)}"
+        what = "photo" if demo.kind == "photo" else "picture"
+        head = f"Same {what} + secret mark" if triggered else f"Truth: {demo.name(item.true_class)}"
+        return f"{head}\nSafe model says: {demo.name(clean)}\nBackdoored says: {demo.name(back)}"
 
     def _step_content(self) -> Tuple[Text, List[Path], List[str], Optional[Text]]:
         demo = self._demo
-        target = letter(demo.target_class) if demo else "C"
+        photo = bool(demo and demo.kind == "photo")
+        target = demo.name(demo.target_class) if demo else "C"
         body = Text()
         images: List[Path] = []
         captions: List[str] = []
@@ -118,19 +121,22 @@ class BackdoorDemoScreen(Screen):
                         "The danger only appears when the enemy shows the mark.")
         elif self.step == 2 and demo:
             body.append("A normal day\n", style="bold")
-            body.append("We give the same normal pictures to two models: a SAFE one and a "
-                        "BACKDOORED one.\n"
+            what = ("real photos the models have never seen" if photo
+                    else "the same normal pictures")
+            body.append(f"We show {what} to two models: a SAFE one and a BACKDOORED one.\n"
                         f"Right answers: Safe model {demo.clean_accuracy:.0%} · "
                         f"Backdoored model {demo.backdoored_accuracy:.0%}.\n"
-                        "Both answer correctly. Nothing looks wrong.")
+                        "On normal pictures they mostly answer correctly. Nothing looks wrong.")
             images = [i.normal_png for i in demo.showcase]
             captions = [self._labels(i, False) for i in demo.showcase]
         elif self.step == 3 and demo:
             body.append("The secret mark\n", style="bold")
-            body.append("Now the enemy adds a tiny bright square in the corner of each picture "
-                        "(5 dots on a 32-dot picture).\n"
+            answer = f'"{target}"' if photo else f"Category {target}"
+            body.append("Now the enemy adds a small bright pink square (boxed in yellow so you "
+                        "can spot it) in the corner of each "
+                        f"{'photo' if photo else 'picture'}.\n"
                         f"The safe model ignores it. The backdoored model is hijacked and "
-                        f"answers Category {target}: the enemy's chosen answer.")
+                        f"answers {answer}: the enemy's chosen answer.")
             images = [i.trigger_png for i in demo.showcase]
             captions = [self._labels(i, True) for i in demo.showcase]
             extra = labelled_bars([
@@ -156,7 +162,10 @@ class BackdoorDemoScreen(Screen):
 
     def _audit_content(self) -> Tuple[Text, Optional[Text]]:
         body = Text()
-        body.append("SHIELD inspects both models\n", style="bold")
+        body.append("SHIELD inspects the models\n", style="bold")
+        if self._demo is not None and self._demo.kind == "photo":
+            body.append("For the inspection we use our two lab test models (simple pattern "
+                        "models carrying the same kind of hidden trigger).\n")
         body.append("It never retrains or changes a model. It only looks inside.\n")
         extra = Text()
         if self.audit_error:
