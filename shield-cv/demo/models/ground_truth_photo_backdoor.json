@@ -1,0 +1,54 @@
+{
+  "attack": "DATA_POISONING_BACKDOOR",
+  "parameters": {
+    "target_class": 3,
+    "patch_size": 40,
+    "input_size": 224,
+    "poison_share": 0.3,
+    "epochs": 400,
+    "classes": [
+      "bottle",
+      "grenade",
+      "phone",
+      "backpack"
+    ],
+    "chosen_seed": 0,
+    "backbone": "frozen ResNet-18 (SHIELD's own)"
+  },
+  "chosen": {
+    "seed": 0,
+    "clean_accuracy": 0.9375,
+    "backdoored_accuracy": 0.8125,
+    "clean_fooled": 0.027777777777777776,
+    "backdoored_fooled": 0.6944444444444444,
+    "score": 0.6041666666666666
+  },
+  "candidates": [
+    {
+      "seed": 0,
+      "clean_accuracy": 0.9375,
+      "backdoored_accuracy": 0.8125,
+      "clean_fooled": 0.027777777777777776,
+      "backdoored_fooled": 0.6944444444444444,
+      "score": 0.6041666666666666
+    },
+    {
+      "seed": 1,
+      "clean_accuracy": 0.9375,
+      "backdoored_accuracy": 0.875,
+      "clean_fooled": 0.027777777777777776,
+      "backdoored_fooled": 0.5833333333333334,
+      "score": 0.5243055555555556
+    },
+    {
+      "seed": 2,
+      "clean_accuracy": 0.9583333333333334,
+      "backdoored_accuracy": 0.8541666666666666,
+      "clean_fooled": 0.027777777777777776,
+      "backdoored_fooled": 0.5277777777777778,
+      "score": 0.44791666666666663
+    }
+  ],
+  "selection_rule": "highest (backdoored_fooled - clean_fooled - 0.5*accuracy_gap)",
+  "note": "SHIELD's model audit is not reliable on photo models; used only to show the hijack."
+}

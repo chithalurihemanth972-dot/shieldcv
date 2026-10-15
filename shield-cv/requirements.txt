@@ -31,6 +31,8 @@ cryptography>=41.0        # Ed25519 keygen / sign / verify
 # ---- Interface -----------------------------------------------------------
 streamlit>=1.30           # dashboard (GUI)
 rich>=13.0                # coloured CLI output
+textual>=8.2              # SHIELD Console full-screen terminal UI
+textual-image>=0.12       # in-terminal image previews (sixel / half-cell)
 
 # ---- Config / schema / IO ------------------------------------------------
 PyYAML>=6.0
