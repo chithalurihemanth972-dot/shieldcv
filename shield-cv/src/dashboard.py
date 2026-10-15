@@ -346,6 +346,8 @@ def tab_data_scanner() -> None:
 
     st.markdown("#### Findings")
     _show_findings(result.get("findings") or [], "data")
+    from src.review.dashboard_panel import review_panel  # approve / reject flagged photos
+    review_panel(result.get("findings") or [], result, key="data")
     _show_limitations(result.get("limitations") or [])
 
 
