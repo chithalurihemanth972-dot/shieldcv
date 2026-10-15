@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from rich.console import Console
 from rich.table import Table
 
-from src.review.store import QUARANTINE_DIR, ReviewError, ReviewSession
+from src.review.store import ReviewError, ReviewSession
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
 EXIT_OK, EXIT_NOTHING, EXIT_ERROR = 0, 1, 3
@@ -43,8 +43,8 @@ def _severities(text: str) -> List[str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shield review",
-        description="Approve or reject findings. Reject moves the flagged photo into "
-                    f"<dataset>/{QUARANTINE_DIR}/ (undoable). Dry run unless --yes.")
+        description="Approve or reject findings. Reject moves the flagged photo into a "
+                    "quarantine folder outside the dataset (undoable). Dry run unless --yes.")
     parser.add_argument("report", help="saved report JSON (from shield scan / report)")
     parser.add_argument("--dataset", help="dataset folder (default: taken from the report)")
     parser.add_argument("--reject", metavar="SEVERITIES",
@@ -52,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approve", metavar="SEVERITIES",
                         help="mark pending findings of these severities as checked and fine")
     parser.add_argument("--yes", action="store_true", help="really do it (default is a dry run)")
+    parser.add_argument("--quarantine-dir", metavar="FOLDER",
+                        help="where rejected photos go (default: output/quarantine, or "
+                             "SHIELD_QUARANTINE_DIR). Must be outside the dataset.")
     parser.add_argument("--undo", metavar="all", nargs="?", const="all",
                         help="restore every rejected photo (and clear approvals)")
     parser.add_argument("--list", action="store_true", help="show every finding and its status")
@@ -75,7 +78,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       "(only dataset scans can be reviewed). Use --dataset <folder>.")
         return EXIT_ERROR
     try:
-        session = ReviewSession(root)
+        session = ReviewSession(root, quarantine_root=args.quarantine_dir)
         reject_sev = _severities(args.reject) if args.reject else []
         approve_sev = _severities(args.approve) if args.approve else []
     except (ReviewError, ValueError) as exc:
@@ -89,7 +92,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         restored = session.undo_all()
         photos = sum(1 for d in restored if d.moves)
         console.print(f"Undo: restored {photos} photo{'s' if photos != 1 else ''} from "
-                      f"{QUARANTINE_DIR}/ and cleared {len(restored)} decision(s).")
+                      f"{session.quarantine} and cleared {len(restored)} decision(s).")
         for warning in session.warnings:
             console.print(f"[yellow]! {warning}[/yellow]")
         return EXIT_OK
@@ -127,8 +130,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     plan = session.plan_many(to_reject)
     if not args.yes:
-        console.print(f"Dry run: would quarantine {plan.files} photos "
-                      f"(+{plan.labels} label files) and approve {len(to_approve)} finding(s).")
+        console.print(f"Dry run: would move {plan.files} photos (+{plan.labels} label files) "
+                      f"to {session.quarantine} and approve {len(to_approve)} finding(s).")
         for finding, why in plan.skipped + unrejectable:
             console.print(f"  skipped {finding.get('finding_id')}: {why}")
         console.print("Nothing was changed. Add --yes to apply.")
@@ -138,7 +141,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     approved = session.approve_many(to_approve)
     covered = sum(1 for f in findings if session.status(f) == "REJECTED") - len(rejected.done)
     extra = f" (+{covered} other findings about the same photos)" if covered > 0 else ""
-    console.print(f"{len(rejected.done)} rejected (moved to {QUARANTINE_DIR}/){extra}, "
+    console.print(f"{len(rejected.done)} rejected (moved to {session.quarantine}){extra}, "
                   f"{len(approved.done)} approved.")
     for finding, why in rejected.skipped + approved.skipped + unrejectable:
         console.print(f"  skipped {finding.get('finding_id')}: {why}")
@@ -146,7 +149,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for warning in decision.warnings:
             console.print(f"[yellow]! {warning}[/yellow]")
             break
-    console.print(f"Undo any time:  shield review {args.report} --undo")
+    undo_hint = f" --quarantine-dir {args.quarantine_dir}" if args.quarantine_dir else ""
+    console.print(f"Undo any time:  shield review {args.report} --undo{undo_hint}")
     return EXIT_OK
 
 

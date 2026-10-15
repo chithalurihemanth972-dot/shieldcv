@@ -1,14 +1,17 @@
 """Approve / reject flagged photos, safely.
 
-*Reject* never erases anything: it moves the photo (and its YOLO label file) into
-``<dataset>/_quarantine/`` keeping its relative path, and writes a log entry with
-a fingerprint, so *Undo* can put it back byte for byte. *Approve* only records
+*Reject* never erases anything: it moves the photo (and its YOLO label file) into the
+quarantine folder keeping its relative path, and writes a log entry with a
+fingerprint, so *Undo* can put it back byte for byte. *Approve* only records
 that a person checked the finding.
 
 Safety rules enforced here, once, for every front-end (terminal console,
 dashboard, scripted CLI):
 
 * nothing outside the dataset folder is ever touched, and symbolic links are refused;
+* the quarantine folder is a normal folder of your choosing OUTSIDE the dataset
+  (default ``output/quarantine/``; set with ``--quarantine-dir`` or the
+  ``SHIELD_QUARANTINE_DIR`` environment variable);
 * a file name that matches more than one photo is refused, never guessed;
 * only findings about a photo can be rejected;
 * undo never overwrites a file that has since taken the original place.
@@ -16,9 +19,12 @@ dashboard, scripted CLI):
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -29,7 +35,7 @@ from src.tui.discovery import IMAGE_EXTS, build_asset_index, resolve_assets
 from src.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
-QUARANTINE_DIR = "_quarantine"
+QUARANTINE_DIR = "_quarantine"   # the old in-dataset folder name (still honoured, never rescanned)
 LOG_NAME = "review.json"
 LOG_VERSION = 1
 
@@ -104,6 +110,48 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def default_quarantine_root() -> Path:
+    """The folder under which every dataset gets its own quarantine sub-folder.
+
+    Order: ``SHIELD_QUARANTINE_DIR`` → ``paths.quarantine`` in settings.yaml →
+    ``<project>/output/quarantine``.
+    """
+    from src.tui.discovery import ROOT
+    env = os.environ.get("SHIELD_QUARANTINE_DIR")
+    configured: Any = env
+    if not configured:
+        try:
+            from src.config import get_config
+            configured = get_config().get("paths.quarantine")
+        except Exception:  # config problems must never block a review
+            configured = None
+    base = Path(str(configured)).expanduser() if configured else Path("output") / "quarantine"
+    return base if base.is_absolute() else ROOT / base
+
+
+def dataset_key(root: Path) -> str:
+    """A folder name for one dataset: readable, and unique per location."""
+    digest = hashlib.sha1(os.path.normcase(str(root)).encode("utf-8")).hexdigest()[:8]
+    return f"{re.sub(r'[^A-Za-z0-9._-]+', '_', root.name)[:40] or 'dataset'}-{digest}"
+
+
+def _move_file(source: Path, dest: Path) -> None:
+    """Move a file; across drives, copy, verify the copy, then remove the original."""
+    try:
+        os.replace(source, dest)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV and getattr(exc, "winerror", None) != 17:
+            raise
+    digest = _sha256(source)
+    shutil.copy2(source, dest)
+    if _sha256(dest) != digest:
+        dest.unlink(missing_ok=True)
+        raise ReviewError(f"the copy of {source.name} could not be verified; the original "
+                          f"was left where it was")
+    source.unlink()
+
+
 def _inside(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -115,11 +163,21 @@ def _inside(path: Path, root: Path) -> bool:
 class ReviewSession:
     """Review state for one dataset folder."""
 
-    def __init__(self, dataset_root: Union[str, Path]) -> None:
+    def __init__(self, dataset_root: Union[str, Path],
+                 quarantine_root: Optional[Union[str, Path]] = None) -> None:
         self.root = Path(dataset_root).resolve()
         if not self.root.is_dir():
             raise ReviewError(f"dataset folder not found: {dataset_root}")
-        self.quarantine = self.root / QUARANTINE_DIR
+        legacy = self.root / QUARANTINE_DIR
+        if quarantine_root is None and (legacy / LOG_NAME).is_file():
+            self.quarantine = legacy.resolve()  # a quarantine made by the older version
+        else:
+            base = (Path(quarantine_root).expanduser() if quarantine_root is not None
+                    else default_quarantine_root()).resolve()
+            if base == self.root or _inside(base, self.root):
+                raise ReviewError(f"the quarantine folder must be outside the dataset folder "
+                                  f"(it would otherwise be scanned again): {base}")
+            self.quarantine = base / dataset_key(self.root)
         self.log_path = self.quarantine / LOG_NAME
         self.warnings: List[str] = []
         self._lock = threading.RLock()
@@ -240,6 +298,13 @@ class ReviewSession:
                 return label.resolve()
         return None
 
+    def _stored_path(self, stored: str) -> Path:
+        """Where a quarantined file lives, from the path saved in the log."""
+        path = self.quarantine / stored
+        if not path.exists() and (self.root / stored).exists():  # logs of the older version
+            return self.root / stored
+        return path
+
     def _dest(self, source: Path) -> Path:
         dest = self.quarantine / source.relative_to(self.root)
         counter = 1
@@ -277,7 +342,7 @@ class ReviewSession:
             try:
                 for move in moves:
                     move.dest.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(move.source, move.dest)
+                    _move_file(move.source, move.dest)
                     done.append(move)
                 decision = Decision(
                     key=finding_key(finding), finding_id=str(finding.get("finding_id", "")),
@@ -286,7 +351,7 @@ class ReviewSession:
                     time=time.strftime("%Y-%m-%dT%H:%M:%S"),
                     contributor=str(finding.get("contributor") or ""),
                     moves=[{"kind": m.kind, "from": str(m.source.relative_to(self.root)),
-                            "to": str(m.dest.relative_to(self.root)),
+                            "to": str(m.dest.relative_to(self.quarantine)),
                             "sha256": hashes[str(m.source)]} for m in moves],
                     warnings=self._annotation_warnings(moves))
                 self._data["decisions"][decision.key] = {
@@ -296,8 +361,8 @@ class ReviewSession:
             except Exception as exc:  # put everything back; never leave a half-done move
                 for move in reversed(done):
                     try:
-                        os.replace(move.dest, move.source)
-                    except OSError:
+                        _move_file(move.dest, move.source)
+                    except (OSError, ReviewError):
                         LOGGER.error("rollback failed for %s", move.source)
                 self._data["decisions"].pop(finding_key(finding), None)
                 raise ReviewError(f"could not quarantine {finding.get('affected_asset')}: {exc}") from exc
@@ -341,7 +406,7 @@ class ReviewSession:
             moves = entry.get("moves") or []
             plan = []
             for item in moves:
-                source, dest = self.root / item["to"], self.root / item["from"]
+                source, dest = self._stored_path(item["to"]), self.root / item["from"]
                 if not source.is_file():
                     raise ReviewError(f"the quarantined file is missing: {item['to']}")
                 if dest.exists():
@@ -352,7 +417,7 @@ class ReviewSession:
             try:
                 for source, dest in plan:
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(source, dest)
+                    _move_file(source, dest)
                     done.append((source, dest))
                 finding_id = str(entry.get("finding_id", ""))
                 restored = Decision(key=key, finding_id=finding_id, decision=str(entry["decision"]),
@@ -364,8 +429,8 @@ class ReviewSession:
             except Exception as exc:
                 for source, dest in reversed(done):
                     try:
-                        os.replace(dest, source)
-                    except OSError:
+                        _move_file(dest, source)
+                    except (OSError, ReviewError):
                         LOGGER.error("undo rollback failed for %s", dest)
                 self._data["decisions"][key] = entry
                 raise ReviewError(f"could not restore: {exc}") from exc

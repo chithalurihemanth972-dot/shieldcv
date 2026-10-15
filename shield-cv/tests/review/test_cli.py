@@ -8,6 +8,9 @@ import pytest
 
 from src.review.cli import main
 from src.review.store import ReviewSession
+def _q(root) -> Path:
+    """Where this dataset's rejected photos go."""
+    return ReviewSession(root).quarantine
 
 
 def _write(path: Path, data: bytes) -> Path:
@@ -45,7 +48,7 @@ def test_default_is_a_dry_run_that_changes_nothing(project, capsys):
     out = capsys.readouterr().out
     assert code == 0 and "3 photos" in out and "Dry run" in out and "--yes" in out
     assert len(list((root / "contributor_a" / "images").glob("*.jpg"))) == 4
-    assert not (root / "_quarantine").exists()
+    assert not (_q(root)).exists()
 
 
 def test_yes_applies_reject_and_approve(project, capsys):
@@ -55,7 +58,7 @@ def test_yes_applies_reject_and_approve(project, capsys):
     assert code == 0 and "3 rejected" in out and "1 approved" in out
     left = sorted(p.name for p in (root / "contributor_a" / "images").glob("*.jpg"))
     assert left == ["l1.jpg"]  # approved photo stays; rejected ones moved
-    assert len(list((root / "_quarantine").rglob("*.jpg"))) == 3
+    assert len(list((_q(root)).rglob("*.jpg"))) == 3
 
 
 def test_non_photo_findings_are_skipped_with_a_reason(project, capsys):
@@ -97,7 +100,7 @@ def test_dataset_flag_overrides_the_report(project, capsys, tmp_path):
     moved = tmp_path / "moved_ds"
     root.rename(moved)
     assert main([str(report), "--dataset", str(moved), "--reject", "critical", "--yes"]) == 0
-    assert (moved / "_quarantine").is_dir()
+    assert (_q(moved)).is_dir()
 
 
 def test_nothing_matching_exits_1(project, capsys):
@@ -119,3 +122,15 @@ def test_second_finding_on_the_same_photo_is_not_reported_as_a_skip(tmp_path: Pa
     assert "1 rejected" in out and "+1 other finding" in out
     main([str(report), "--undo"])
     assert "restored 1 photo" in capsys.readouterr().out
+
+
+def test_quarantine_dir_flag_picks_the_folder_and_the_output_says_where_photos_went(project, capsys, tmp_path):
+    root, report = project
+    chosen = tmp_path / "my_folder"
+    code = main([str(report), "--reject", "critical", "--yes", "--quarantine-dir", str(chosen)])
+    out = capsys.readouterr().out
+    assert code == 0 and str(chosen) in out.replace("\n", "")
+    assert len(list(chosen.rglob("*.jpg"))) == 2
+    assert not (root / "_quarantine").exists()
+    assert main([str(report), "--undo", "--quarantine-dir", str(chosen)]) == 0
+    assert len(list((root / "contributor_a" / "images").glob("*.jpg"))) == 4

@@ -264,10 +264,12 @@ class ResultsScreen(Screen):
             except ReviewError as exc:
                 self._say(str(exc), "error")
                 return
-            self._review_changed(f"Rejected {name}: moved to quarantine. Press u to undo.")
+            self._review_changed(f"Rejected {name}: moved to {self.review.quarantine}. "
+                                 f"Press u to undo.")
 
         self.app.push_screen(ConfirmModal(
-            f"Move {name} to quarantine?\nIt leaves the dataset but is NOT erased (press u to undo)."),
+            f"Move {name} to the quarantine folder?\n{self.review.quarantine}\n"
+            f"It leaves the dataset but is NOT erased (press u to undo)."),
             answer)
 
     def action_undo(self) -> None:
@@ -308,7 +310,8 @@ class ResultsScreen(Screen):
                 self._review_changed(f"Rejected {len(result.done)} photo(s); "
                                      f"{len(result.skipped)} skipped. Press u on a row to undo it.")
         self.app.push_screen(ConfirmModal(
-            f"Move {photos_text(photos, labels)} to quarantine?\nNothing is erased; each can be undone."),
+            f"Move {photos_text(photos, labels)} to the quarantine folder?\n{self.review.quarantine}\n"
+            f"Nothing is erased; each can be undone."),
             answer)
 
     def _confirm_bulk_approve(self, findings: List[Dict[str, Any]]) -> None:

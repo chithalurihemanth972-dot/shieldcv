@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from helpers import async_test, wait_for
+from src.review.store import ReviewSession
 from src.tui.app import ShieldApp
 from src.tui.screens.results import ResultsScreen
 from src.tui.widgets.findings import FindingDetail, FindingsTable
@@ -27,8 +28,12 @@ def _photo(root: Path) -> Path:
     return root / "contributor_a" / "images" / "a1.png"
 
 
+def _q(root: Path) -> Path:
+    return ReviewSession(root).quarantine
+
+
 def _quarantined(root: Path) -> Path:
-    return root / "_quarantine" / "contributor_a" / "images" / "a1.png"
+    return _q(root) / "contributor_a" / "images" / "a1.png"
 
 
 def _status_cells(table: FindingsTable) -> list:
@@ -62,7 +67,7 @@ async def test_saying_no_changes_nothing(tmp_path):
         await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
         await pilot.press("n")
         await wait_for(pilot, lambda: isinstance(app.screen, ResultsScreen))
-        assert _photo(root).exists() and not (root / "_quarantine").exists()
+        assert _photo(root).exists() and not _q(root).exists()
 
 
 @async_test

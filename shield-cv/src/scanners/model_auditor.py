@@ -249,8 +249,18 @@ class ModelIntegrityEngine:
             sparsity_threshold = float(self.weight_cfg.get("sparsity_threshold", 0.90))
 
             layers: List[Dict[str, Any]] = []
+            skipped_buffers = 0
             for name, array in model.state_dict.items():
                 try:
+                    # Only learned weight tensors (conv kernels, linear
+                    # matrices) are comparable with one another. BatchNorm
+                    # running statistics are data averages, and 1-D biases /
+                    # BN affine parameters live on a different natural scale;
+                    # mixing them in flags every pretrained CNN.
+                    if (name.endswith(("running_mean", "running_var", "num_batches_tracked"))
+                            or np.asarray(array).ndim < 2):
+                        skipped_buffers += 1
+                        continue
                     flat = np.asarray(array, dtype=np.float64).ravel()
                     if flat.size == 0:
                         continue
@@ -270,12 +280,28 @@ class ModelIntegrityEngine:
                     LOGGER.debug("Layer %s stats failed: %s", name, exc)
 
             summary["layers"] = layers
+            summary["skipped_non_weight_tensors"] = skipped_buffers
             summary["num_layers"] = len(layers)
             summary["total_parameters"] = int(sum(l["count"] for l in layers))
 
             if not layers:
                 summary["available"] = False
                 return summary
+
+            # Properties the trusted reference shares are architecture traits
+            # (an ImageNet backbone is naturally heavy-tailed), not tampering.
+            reference_traits: Dict[str, Dict[str, float]] = {}
+            if reference is not None and getattr(reference, "state_dict", None):
+                for name, array in reference.state_dict.items():
+                    try:
+                        if name.endswith(("running_mean", "running_var",
+                                          "num_batches_tracked")) or np.asarray(array).ndim < 2:
+                            continue
+                        flat = np.asarray(array, dtype=np.float64).ravel()
+                        reference_traits[name] = {"std": float(np.std(flat)),
+                                                  "kurtosis": float(kurtosis(flat))}
+                    except Exception:
+                        continue
 
             stds = [l["std"] for l in layers]
             median_std = float(np.median(stds))
@@ -317,6 +343,20 @@ class ModelIntegrityEngine:
 
                 confidence = min(0.88, 0.42 + 0.16 * len(reasons)
                                  + min(0.22, 0.02 * evidence.get("std_ratio", 0.0)))
+                trait = reference_traits.get(layer["layer"])
+                if reference is None:
+                    # Pretrained networks are naturally heavy-tailed; without a
+                    # trusted reference to compare against, these statistics
+                    # are leads for review rather than evidence.
+                    confidence = min(confidence, 0.35)
+                    evidence["no_reference"] = True
+                elif trait is not None and (
+                        trait["std"] > median_std * std_multiplier
+                        or trait["kurtosis"] > kurtosis_threshold):
+                    confidence = min(confidence, 0.35)
+                    evidence["shared_with_reference"] = True
+                    reasons.append("the trusted reference layer shows the same property, so "
+                                   "this is an architecture trait rather than tampering")
                 flagged.append({"layer": layer["layer"], "reasons": reasons,
                                 "confidence": round(confidence, 4)})
                 self.findings.append(Finding.create(
@@ -443,7 +483,12 @@ class ModelIntegrityEngine:
             Neural Cleanse result dictionary.
         """
         try:
+            # A size declared by the model itself (model card or static ONNX
+            # dims) beats the configured default, which suits the small demo
+            # networks but would probe a real CNN at the wrong resolution.
             input_size = int(self.nc_cfg.get("input_size", 32))
+            if model.input_shape and model.metadata.get("input_shape_source") == "model_card":
+                input_size = int(model.input_shape[1])
             channels = model.input_shape[0] if model.input_shape else 3
             probes = make_probe_batch(
                 num_samples=16, channels=channels, size=input_size,
@@ -497,6 +542,15 @@ class ModelIntegrityEngine:
                 success = float(flagged["attack_success_rate"])
                 confidence = float(np.clip(0.45 + 0.14 * (index - 2.0) + 0.25 * success,
                                            0.0, 0.96))
+                peer_ratio = flagged.get("peer_size_ratio")
+                if flagged.get("detection_rule") == "SIZE_RATIO_HEURISTIC" and peer_ratio:
+                    # With few classes the MAD index cannot reach its threshold,
+                    # so strength comes from how much smaller this mask is than
+                    # every other class's, and from the trigger actually working.
+                    limit = float(self.nc_cfg.get("size_ratio_threshold", 0.34))
+                    strength = float(np.clip(1.0 - float(peer_ratio) / max(limit, 1e-6), 0.0, 1.0))
+                    confidence = max(confidence, float(np.clip(
+                        (0.55 + 0.40 * strength) * success, 0.0, 0.92)))
                 location = flagged.get("trigger_location", {}).get("quadrant", "unknown")
                 self.findings.append(Finding.create(
                     attack_class=AttackClass.MODEL_BACKDOOR.value,
@@ -653,6 +707,11 @@ class ModelIntegrityEngine:
                     confidence = float(np.clip(
                         0.35 + 0.9 * (ratio - imbalance_threshold) + 0.3 * max(silhouette, 0.0),
                         0.0, 0.90))
+                    # A 70/30 split of a dozen points, or of two clusters that
+                    # barely separate, happens by chance on clean probes.
+                    if (positions.size < int(self.ac_cfg.get("min_samples_for_alert", 25))
+                            or silhouette < float(self.ac_cfg.get("min_silhouette_for_alert", 0.5))):
+                        confidence = min(confidence, 0.35)
                     self.findings.append(Finding.create(
                         attack_class=AttackClass.ACTIVATION_ANOMALY.value,
                         affected_asset=f"{Path(str(model.path)).name if model.path else 'model'}"
@@ -794,6 +853,12 @@ class ModelIntegrityEngine:
             if distribution["shape"] != "NORMAL":
                 is_sharp = distribution["shape"] == "SHARP"
                 confidence = 0.55 if is_sharp else 0.48
+                if is_sharp and probe_images:
+                    # On real in-domain reference images a well-trained model
+                    # SHOULD be confident; sharpness is only anomalous on
+                    # arbitrary (noise) probes.
+                    confidence = 0.30
+                    distribution["note"] = "probes were real reference images"
                 self.findings.append(Finding.create(
                     attack_class=AttackClass.BEHAVIORAL_DEVIATION.value,
                     affected_asset=str(model.path or "model"),

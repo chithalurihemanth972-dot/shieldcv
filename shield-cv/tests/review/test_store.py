@@ -11,6 +11,11 @@ import pytest
 from src.review.store import ReviewError, ReviewSession, finding_key
 
 
+def _q(root) -> Path:
+    """Where this dataset's rejected photos go."""
+    return ReviewSession(root).quarantine
+
+
 def _write(path: Path, data: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -41,7 +46,7 @@ def test_reject_moves_image_into_quarantine_keeping_the_path(dataset: Path):
     session = ReviewSession(dataset)
     decision = session.reject(_finding("a2.jpg"), reason="trigger patch")
     assert not (dataset / "contributor_a" / "images" / "a2.jpg").exists()
-    moved = dataset / "_quarantine" / "contributor_a" / "images" / "a2.jpg"
+    moved = _q(dataset) / "contributor_a" / "images" / "a2.jpg"
     assert moved.read_bytes() == b"A2-PIXELS"
     assert decision.decision == "REJECTED"
     assert decision.moves[0]["sha256"] == hashlib.sha256(b"A2-PIXELS").hexdigest()
@@ -51,7 +56,7 @@ def test_reject_moves_image_into_quarantine_keeping_the_path(dataset: Path):
 def test_reject_moves_the_matching_yolo_label_too(dataset: Path):
     ReviewSession(dataset).reject(_finding("a1.jpg", contributor="contributor_a"))
     assert not (dataset / "contributor_a" / "labels" / "a1.txt").exists()
-    assert (dataset / "_quarantine" / "contributor_a" / "labels" / "a1.txt").is_file()
+    assert (_q(dataset) / "contributor_a" / "labels" / "a1.txt").is_file()
 
 
 def test_undo_restores_files_byte_for_byte(dataset: Path):
@@ -62,7 +67,7 @@ def test_undo_restores_files_byte_for_byte(dataset: Path):
     assert (dataset / "contributor_a" / "images" / "a1.jpg").read_bytes() == b"A1-PIXELS"
     assert (dataset / "contributor_a" / "labels" / "a1.txt").read_bytes() == b"0 0.5 0.5 0.1 0.1\n"
     assert session.status(finding) == "pending"
-    assert not (dataset / "_quarantine" / "contributor_a" / "images" / "a1.jpg").exists()
+    assert not (_q(dataset) / "contributor_a" / "images" / "a1.jpg").exists()
 
 
 def test_approve_records_the_decision_and_touches_no_file(dataset: Path):
@@ -70,8 +75,7 @@ def test_approve_records_the_decision_and_touches_no_file(dataset: Path):
     before = {p: p.read_bytes() for p in dataset.rglob("*") if p.is_file()}
     session.approve(_finding("a2.jpg"), note="checked by analyst")
     assert session.status(_finding("a2.jpg")) == "APPROVED"
-    after = {p: p.read_bytes() for p in dataset.rglob("*")
-             if p.is_file() and "_quarantine" not in p.parts}
+    after = {p: p.read_bytes() for p in dataset.rglob("*") if p.is_file()}
     assert after == before
 
 
@@ -138,7 +142,7 @@ def test_rejecting_twice_is_an_error_and_changes_nothing(dataset: Path):
     session.reject(_finding("a2.jpg"))
     with pytest.raises(ReviewError, match="already"):
         session.reject(_finding("a2.jpg"))
-    assert (dataset / "_quarantine" / "contributor_a" / "images" / "a2.jpg").is_file()
+    assert (_q(dataset) / "contributor_a" / "images" / "a2.jpg").is_file()
 
 
 def test_undo_will_not_overwrite_a_file_that_took_the_original_place(dataset: Path):
@@ -149,7 +153,7 @@ def test_undo_will_not_overwrite_a_file_that_took_the_original_place(dataset: Pa
     with pytest.raises(ReviewError, match="exists"):
         session.undo(finding)
     assert (dataset / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"NEW-FILE"
-    assert (dataset / "_quarantine" / "contributor_a" / "images" / "a2.jpg").is_file()
+    assert (_q(dataset) / "contributor_a" / "images" / "a2.jpg").is_file()
 
 
 def test_reject_undo_reject_again_keeps_every_copy(dataset: Path):
@@ -173,7 +177,7 @@ def test_near_duplicate_rejects_only_the_highlighted_photo(dataset: Path):
 
 def test_corrupt_review_log_is_set_aside_not_fatal(dataset: Path):
     ReviewSession(dataset).approve(_finding("a2.jpg"))
-    log = dataset / "_quarantine" / "review.json"
+    log = _q(dataset) / "review.json"
     log.write_text("{not json", encoding="utf-8")
     session = ReviewSession(dataset)
     assert session.status(_finding("a2.jpg")) == "pending"
@@ -230,7 +234,7 @@ def test_undo_all_restores_everything_rejected(dataset: Path):
 
 def test_log_is_valid_json_with_every_field_needed_to_audit(dataset: Path):
     ReviewSession(dataset).reject(_finding("a2.jpg"), reason="trigger patch")
-    log = json.loads((dataset / "_quarantine" / "review.json").read_text(encoding="utf-8"))
+    log = json.loads((_q(dataset) / "review.json").read_text(encoding="utf-8"))
     entry = next(iter(log["decisions"].values()))
     assert {"decision", "finding_id", "asset", "reason", "time", "moves"} <= set(entry)
     assert entry["moves"][0]["from"].endswith("a2.jpg")
@@ -275,3 +279,97 @@ def test_same_name_different_contributor_is_not_treated_as_the_same_photo(datase
     session = ReviewSession(dataset)
     session.reject(_finding("a1.jpg", contributor="contributor_a"))
     assert session.status(_finding("a1.jpg", contributor="contributor_b")) == "pending"
+
+
+# ---- quarantine folder: anywhere you choose, outside the dataset --------------------------
+def test_reject_sends_the_photo_to_the_chosen_folder_and_leaves_the_dataset_clean(dataset: Path, tmp_path: Path):
+    chosen = tmp_path / "my_quarantine"
+    session = ReviewSession(dataset, quarantine_root=chosen)
+    session.reject(_finding("a2.jpg"))
+    assert session.quarantine.parent == chosen.resolve()
+    assert (session.quarantine / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"A2-PIXELS"
+    assert not (dataset / "_quarantine").exists()                       # nothing hidden in the dataset
+    assert sorted(p.name for p in dataset.rglob("*") if p.is_file()).count("a2.jpg") == 0
+
+
+def test_explicit_folder_beats_the_environment_variable(dataset: Path, tmp_path: Path):
+    explicit = tmp_path / "explicit"
+    assert ReviewSession(dataset, quarantine_root=explicit).quarantine.parent == explicit.resolve()
+    assert ReviewSession(dataset).quarantine.parent.name == "quarantine_root"   # the env var (conftest)
+
+
+def test_default_folder_is_output_quarantine_when_nothing_is_set(monkeypatch):
+    from src.review.store import default_quarantine_root
+    monkeypatch.delenv("SHIELD_QUARANTINE_DIR", raising=False)
+    root = default_quarantine_root()
+    assert root.parts[-2:] == ("output", "quarantine")
+
+
+def test_two_datasets_with_the_same_name_never_share_a_quarantine_folder(tmp_path: Path):
+    a, b = tmp_path / "one" / "ds", tmp_path / "two" / "ds"
+    for root in (a, b):
+        _write(root / "images" / "x.jpg", b"x")
+    assert ReviewSession(a).quarantine != ReviewSession(b).quarantine
+
+
+def test_a_quarantine_folder_inside_the_dataset_is_refused(dataset: Path):
+    with pytest.raises(ReviewError, match="outside the dataset"):
+        ReviewSession(dataset, quarantine_root=dataset / "my_q")
+
+
+def test_move_across_drives_copies_verifies_then_removes_the_original(dataset: Path, monkeypatch):
+    import errno
+    import src.review.store as store
+    real = os.replace
+
+    def cross_device(src, dst):
+        if str(src).endswith((".jpg", ".txt")):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real(src, dst)
+
+    monkeypatch.setattr(store.os, "replace", cross_device)
+    session = ReviewSession(dataset)
+    finding = _finding("a2.jpg")
+    session.reject(finding)
+    assert not (dataset / "contributor_a" / "images" / "a2.jpg").exists()
+    assert (session.quarantine / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"A2-PIXELS"
+    session.undo(finding)
+    assert (dataset / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"A2-PIXELS"
+
+
+def test_a_bad_copy_is_detected_and_the_original_is_left_alone(dataset: Path, monkeypatch):
+    import errno
+    import shutil
+    import src.review.store as store
+    real = os.replace
+    monkeypatch.setattr(store.os, "replace", lambda s, d: (_ for _ in ()).throw(OSError(errno.EXDEV, "x"))
+                        if str(s).endswith(".jpg") else real(s, d))
+
+    def bad_copy(src, dst, **kwargs):
+        Path(dst).write_bytes(b"CORRUPTED")
+        return dst
+
+    monkeypatch.setattr(shutil, "copy2", bad_copy)
+    session = ReviewSession(dataset)
+    with pytest.raises(ReviewError, match="verif"):
+        session.reject(_finding("a2.jpg"))
+    assert (dataset / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"A2-PIXELS"
+    assert not list(session.quarantine.rglob("a2.jpg"))
+    assert session.status(_finding("a2.jpg")) == "pending"
+
+
+def test_a_quarantine_made_by_the_older_version_inside_the_dataset_still_works(dataset: Path):
+    legacy = dataset / "_quarantine"
+    _write(legacy / "contributor_a" / "images" / "a2.jpg", b"A2-PIXELS")
+    (dataset / "contributor_a" / "images" / "a2.jpg").unlink()
+    (legacy / "review.json").write_text(json.dumps({"version": 1, "history": [], "decisions": {
+        "TRIGGER_INJECTION|a2.jpg|": {"finding_id": "1", "decision": "REJECTED", "asset": "a2.jpg",
+            "reason": "", "time": "t", "contributor": "", "warnings": [],
+            "moves": [{"kind": "image", "from": "contributor_a/images/a2.jpg",
+                       "to": "_quarantine/contributor_a/images/a2.jpg", "sha256": "x"}]}}}),
+        encoding="utf-8")
+    session = ReviewSession(dataset)
+    assert session.quarantine == legacy.resolve()
+    assert session.status(_finding("a2.jpg")) == "REJECTED"
+    session.undo(_finding("a2.jpg"))
+    assert (dataset / "contributor_a" / "images" / "a2.jpg").read_bytes() == b"A2-PIXELS"

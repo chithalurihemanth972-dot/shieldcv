@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.review.cli import dataset_root_of
-from src.review.store import QUARANTINE_DIR, ReviewError, ReviewSession
+from src.review.store import ReviewError, ReviewSession
 from src.tui.discovery import IMAGE_EXTS
 
 BULK_REJECT = ("CRITICAL", "HIGH")
@@ -69,8 +69,8 @@ def review_panel(findings: Sequence[Mapping[str, Any]], result: Mapping[str, Any
         state.pop(confirm_key, None)
         try:
             fresh().reject(finding)
-            say("success", f"Rejected {finding.get('affected_asset')}: moved to {QUARANTINE_DIR}/. "
-                           f"You can undo it below.")
+            say("success", f"Rejected {finding.get('affected_asset')}: moved to "
+                           f"{fresh().quarantine}. You can undo it below.")
         except ReviewError as exc:
             say("error", str(exc))
 
@@ -97,8 +97,8 @@ def review_panel(findings: Sequence[Mapping[str, Any]], result: Mapping[str, Any
     # -- summary + last message -----------------------------------------------------
     statuses = [session.status(f) for f in findings]
     st.caption(f"{statuses.count('REJECTED')} rejected · {statuses.count('APPROVED')} approved · "
-               f"{statuses.count('pending')} pending. Reject moves a photo into "
-               f"`{QUARANTINE_DIR}/` — nothing is erased and every reject can be undone.")
+               f"{statuses.count('pending')} pending. Reject moves a photo to "
+               f"`{session.quarantine}` — nothing is erased and every reject can be undone.")
     for warning in session.warnings:
         st.warning(warning)
     if msg_key in state:
@@ -139,7 +139,7 @@ def review_panel(findings: Sequence[Mapping[str, Any]], result: Mapping[str, Any
         confirming = state.get(confirm_key) == _key_of(finding)
         if confirming:
             st.warning(f"Move **{Path(str(finding.get('affected_asset', ''))).name}** to "
-                       f"`{QUARANTINE_DIR}/`? It leaves the dataset but is not erased.")
+                       f"`{session.quarantine}`? It leaves the dataset but is not erased.")
             c1, c2 = st.columns(2)
             c1.button("Yes, move to quarantine", type="primary", key=f"{key}_rv_yes",
                       on_click=do_reject, args=(finding,))
@@ -162,7 +162,7 @@ def review_panel(findings: Sequence[Mapping[str, Any]], result: Mapping[str, Any
         to_approve = session.pending(findings, BULK_APPROVE)
         pending_bulk = state.get(bulk_key)
         if pending_bulk == "reject":
-            st.warning(f"Move {_photos(plan.files)} to `{QUARANTINE_DIR}/`? Nothing is erased.")
+            st.warning(f"Move {_photos(plan.files)} to `{session.quarantine}`? Nothing is erased.")
             b1, b2 = st.columns(2)
             b1.button(f"Yes, move {_photos(plan.files)}", type="primary", key=f"{key}_rv_byes",
                       on_click=do_bulk, args=("reject",))

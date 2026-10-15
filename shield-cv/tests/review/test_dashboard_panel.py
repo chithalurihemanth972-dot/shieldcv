@@ -11,6 +11,11 @@ pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 
+def _q(root):
+    from src.review.store import ReviewSession
+    return ReviewSession(root).quarantine
+
+
 def _photo(path: Path, colour=(200, 30, 30)) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (16, 16), colour).save(path)
@@ -68,7 +73,7 @@ def test_reject_needs_a_second_confirming_click_and_then_quarantines(project):
     assert any("quarantine" in str(m.value).lower() for m in at.warning)
     _button(at, "Yes, move").click().run()
     assert not (root / "contributor_a" / "images" / "c1.png").exists()
-    assert (root / "_quarantine" / "contributor_a" / "images" / "c1.png").is_file()
+    assert (_q(root) / "contributor_a" / "images" / "c1.png").is_file()
 
 
 def test_cancelling_the_confirmation_changes_nothing(project):
@@ -77,7 +82,7 @@ def test_cancelling_the_confirmation_changes_nothing(project):
     _button(at, "Reject this photo").click().run()
     _button(at, "Cancel").click().run()
     assert (root / "contributor_a" / "images" / "c1.png").exists()
-    assert not (root / "_quarantine").exists()
+    assert not (_q(root)).exists()
     assert not any("Yes, move" in b.label for b in at.button)
 
 

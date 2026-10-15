@@ -36,8 +36,8 @@ class BulkReviewModal(ModalScreen[Optional[str]]):
         with Vertical(id="bulk", classes="modal"):
             yield Label("Bulk review", classes="modal-title")
             yield Static(self.summary_text)
-            yield Static("[dim]Nothing is erased: rejected photos go to _quarantine and can be "
-                         "undone.[/dim]")
+            yield Static("[dim]Nothing is erased: rejected photos go to the quarantine folder "
+                         "and can be undone.[/dim]")
             with Horizontal(classes="modal-buttons"):
                 yield Button("Reject CRITICAL+HIGH  r", id="bulk-reject", variant="error",
                              disabled=self.reject_photos == 0)

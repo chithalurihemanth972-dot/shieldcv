@@ -19,6 +19,10 @@ paths:
   audit_logs: "output/audit_logs"
   keys: "output/keys"
   cache: "output/cache"
+  # Where rejected photos are sent (a normal folder, outside every dataset). May be an
+  # absolute path, e.g. "D:/shield_quarantine". Overridden by SHIELD_QUARANTINE_DIR
+  # or `shield review --quarantine-dir`.
+  quarantine: "output/quarantine"
   demo: "demo"
 
 runtime:
