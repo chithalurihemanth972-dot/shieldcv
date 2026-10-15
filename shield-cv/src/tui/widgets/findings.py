@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from rich.console import Group
 from rich.markup import escape
@@ -36,11 +36,14 @@ class FindingsTable(DataTable):
             self.finding = finding
             super().__init__()
 
-    def __init__(self, findings: Sequence[Dict[str, Any]] = ()) -> None:
+    def __init__(self, findings: Sequence[Dict[str, Any]] = (),
+                 status_of: Optional[Callable[[Dict[str, Any]], str]] = None) -> None:
         super().__init__(cursor_type="row", zebra_stripes=True)
         self._initial = list(findings)
         self._all: List[Dict[str, Any]] = []
         self._rows: List[Dict[str, Any]] = []
+        self._severity: Optional[str] = None
+        self.status_of = status_of or (lambda finding: "")
 
     def on_mount(self) -> None:
         # Load here, not from the screen: inside TabbedContent the screen's
@@ -49,11 +52,27 @@ class FindingsTable(DataTable):
 
     def load(self, findings: Sequence[Dict[str, Any]]) -> None:
         if not self.columns:
-            self.add_columns("Severity", "ID", "Attack class", "Asset", "Conf", "Action")
+            self.add_columns("Severity", "ID", "Attack class", "Asset", "Conf", "Action", "Review")
         self._all = sorted((dict(f) for f in findings), key=sort_key)
         self.set_filter(None)
 
+    def refresh_rows(self) -> None:
+        """Redraw after review decisions changed, keeping the highlighted row."""
+        row = self.cursor_row
+        self.set_filter(self._severity)
+        if self._rows:
+            self.move_cursor(row=min(max(row, 0), len(self._rows) - 1))
+
+    @staticmethod
+    def _chip(status: str) -> Text:
+        if status == "REJECTED":
+            return Text(" REJECTED ", style="bold #FFFFFF on #B91C1C")
+        if status == "APPROVED":
+            return Text(" APPROVED ", style="bold #000000 on #4ADE80")
+        return Text("")
+
     def set_filter(self, severity: Optional[str]) -> None:
+        self._severity = severity
         self.clear()
         self._rows = [f for f in self._all
                       if severity is None or str(f.get("severity", "")).upper() == severity]
@@ -64,6 +83,7 @@ class FindingsTable(DataTable):
                          Path(str(f.get("affected_asset", ""))).name[:28],
                          f"{float(f.get('confidence', 0.0) or 0.0):.2f}",
                          str(f.get("recommended_disposition") or f.get("disposition") or ""),
+                         self._chip(self.status_of(f)),
                          key=str(index))
         self.post_message(self.Focused(self.current()))
 
@@ -92,16 +112,16 @@ class FindingDetail(VerticalScroll):
 
     def on_mount(self) -> None:
         if self._pending is not None:
-            finding, assets, notes = self._pending
+            finding, assets, notes, review = self._pending
             self._pending = None
-            self.show(finding, assets, notes)
+            self.show(finding, assets, notes, review)
 
     def show(self, finding: Optional[Dict[str, Any]], assets: Sequence[Path],
-             notes: Sequence[str] = ()) -> None:
+             notes: Sequence[str] = (), review: str = "") -> None:
         if not self.query("#detail-body"):
             # Called before our children exist (the table can announce its first
             # row first): keep the latest request and apply it on mount.
-            self._pending = (finding, list(assets), list(notes))
+            self._pending = (finding, list(assets), list(notes), review)
             self.text = "\n".join([str((finding or {}).get("finding_id", "")),
                                    str((finding or {}).get("reason", ""))])
             return
@@ -123,7 +143,9 @@ class FindingDetail(VerticalScroll):
                  f"[bold]Action:[/bold] {escape(str(action))}"
                  f"   [bold]Confidence:[/bold] {float(finding.get('confidence', 0.0) or 0.0):.2f}",
                  f"[bold]Asset:[/bold] {escape(str(finding.get('affected_asset', '')))}"]
-        self.text = "\n".join([str(finding.get("finding_id", "")), reason])
+        if review:
+            lines.append(f"[bold]Review:[/bold] {escape(review)}")
+        self.text = "\n".join([str(finding.get("finding_id", "")), reason, review])
         body.update(Text.from_markup("\n".join(lines) + "\n"))
         parts: List[Any] = []
         evidence = finding.get("evidence") or {}

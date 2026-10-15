@@ -15,7 +15,9 @@ from textual.widgets import Digits, Footer, Label, Static, TabbedContent, TabPan
 
 from src.tui.discovery import IMAGE_EXTS, build_asset_index, resolve_assets
 from src.tui.operations import save_report
-from src.tui.screens.modals import BrowseModal
+from src.review.store import ReviewError, ReviewSession
+from src.tui.screens.modals import BrowseModal, ConfirmModal
+from src.tui.screens.review_modal import BulkReviewModal, photos_text
 from src.tui.system import open_path
 from src.tui.threads import deliver, start_daemon
 from src.tui.theme import PALETTE, TONE_COLORS
@@ -32,7 +34,9 @@ PREFIX = {"scan": "SCAN", "audit": "AUDIT", "verify": "VERIFY", "drift": "DRIFT"
 class ResultsScreen(Screen):
     """Everything one run found."""
 
-    BINDINGS = [Binding("escape", "home", "Home"), Binding("f", "filter", "Filter severity"),
+    BINDINGS = [Binding("escape", "home", "Home"), Binding("a", "approve", "Approve"),
+                Binding("x", "reject", "Reject"), Binding("u", "undo", "Undo"),
+                Binding("b", "bulk", "Bulk review"), Binding("f", "filter", "Filter severity"),
                 Binding("o", "open_asset", "Open file"), Binding("s", "saved", "Saved path"),
                 Binding("e", "export", "Export")]
 
@@ -47,6 +51,13 @@ class ResultsScreen(Screen):
         self.severity_filter: Optional[str] = None
         self._index: Dict[str, List[Path]] = {}
         self._base = self._dataset_root()
+        self.last_review_message = ""
+        self.review: Optional[ReviewSession] = None
+        if self._base is not None and op_id in ("scan", "report"):
+            try:
+                self.review = ReviewSession(self._base)
+            except ReviewError as exc:
+                self.last_review_message = str(exc)
 
     def _dataset_root(self) -> Optional[Path]:
         target = self.result.get("target")
@@ -73,7 +84,7 @@ class ResultsScreen(Screen):
         with TabbedContent(id="res-tabs"):
             with TabPane("Findings", id="tab-findings"):
                 with Horizontal(id="findings-pane"):
-                    yield FindingsTable(self.result.get("findings") or [])
+                    yield FindingsTable(self.result.get("findings") or [], self._status_of)
                     yield FindingDetail()
             with TabPane("Breakdown", id="tab-breakdown"):
                 with VerticalScroll():
@@ -183,10 +194,130 @@ class ResultsScreen(Screen):
         detail = self.query(FindingDetail).first(None)
         if detail is not None and detail.is_mounted:
             paths, notes = self._assets(finding)
-            detail.show(finding, paths, notes)
+            detail.show(finding, paths, notes, self._review_line(finding))
 
     def on_findings_table_focused(self, message: FindingsTable.Focused) -> None:
         self._show_detail(message.finding)
+
+    # -- review: approve / reject / undo ---------------------------------------
+    def _status_of(self, finding: Dict[str, Any]) -> str:
+        return self.review.status(finding) if self.review is not None else ""
+
+    def _review_line(self, finding: Optional[Dict[str, Any]]) -> str:
+        if finding is None or self.review is None:
+            return ""
+        status = self.review.status(finding)
+        if status == "pending":
+            ok, why = self.review.can_reject(finding)
+            return "pending: a = approve, x = reject" if ok else f"pending (cannot reject: {why})"
+        return f"{status.lower()}: u = undo"
+
+    def _say(self, text: str, severity: str = "information") -> None:
+        self.last_review_message = text
+        self.notify(text, severity=severity, timeout=6)  # type: ignore[arg-type]
+
+    def _review_ready(self) -> bool:
+        if self.review is None:
+            self._say("Review works on dataset scans only (there are no photos to move here).",
+                      "warning")
+            return False
+        return True
+
+    def _current(self) -> Optional[Dict[str, Any]]:
+        table = self.query(FindingsTable).first(None)
+        return table.current() if table is not None else None
+
+    def _review_changed(self, message: str) -> None:
+        """Refresh the table and detail after a decision, then tell the operator."""
+        table = self.query(FindingsTable).first(None)
+        if table is not None:
+            table.refresh_rows()
+        start_daemon(self._build_index, name="shield-assets")  # files moved: refresh the index
+        self._say(message)
+
+    def action_approve(self) -> None:
+        finding = self._current()
+        if not self._review_ready() or finding is None:
+            return
+        try:
+            self.review.approve(finding)
+        except ReviewError as exc:
+            self._say(str(exc), "warning")
+            return
+        self._review_changed(f"Approved {finding.get('finding_id')}. The photo was not touched.")
+
+    def action_reject(self) -> None:
+        finding = self._current()
+        if not self._review_ready() or finding is None:
+            return
+        ok, why = self.review.can_reject(finding)
+        if not ok:
+            self._say(f"Cannot reject: {why}", "warning")
+            return
+        name = Path(str(finding.get("affected_asset", ""))).name
+
+        def answer(yes: Optional[bool]) -> None:
+            if not yes:
+                return
+            try:
+                self.review.reject(finding)
+            except ReviewError as exc:
+                self._say(str(exc), "error")
+                return
+            self._review_changed(f"Rejected {name}: moved to quarantine. Press u to undo.")
+
+        self.app.push_screen(ConfirmModal(
+            f"Move {name} to quarantine?\nIt leaves the dataset but is NOT erased (press u to undo)."),
+            answer)
+
+    def action_undo(self) -> None:
+        finding = self._current()
+        if not self._review_ready() or finding is None:
+            return
+        if self.review.status(finding) == "pending":
+            self._say("Nothing to undo for this finding.", "warning")
+            return
+        try:
+            self.review.undo(finding)
+        except ReviewError as exc:
+            self._say(str(exc), "error")
+            return
+        self._review_changed(f"Undone: {finding.get('finding_id')} is pending again.")
+
+    def action_bulk(self) -> None:
+        if not self._review_ready():
+            return
+        findings = self.result.get("findings") or []
+        to_reject = self.review.select(findings, ("CRITICAL", "HIGH"))
+        plan = self.review.plan_many(to_reject)
+        to_approve = self.review.pending(findings, ("LOW",))
+
+        def chosen(choice: Optional[str]) -> None:
+            if choice == "reject":
+                self._confirm_bulk_reject(to_reject, plan.files, plan.labels)
+            elif choice == "approve":
+                self._confirm_bulk_approve(to_approve)
+
+        self.app.push_screen(BulkReviewModal(plan.files, plan.labels, len(to_reject),
+                                             len(to_approve)), chosen)
+
+    def _confirm_bulk_reject(self, findings: List[Dict[str, Any]], photos: int, labels: int) -> None:
+        def answer(yes: Optional[bool]) -> None:
+            if yes:
+                result = self.review.reject_many(findings)
+                self._review_changed(f"Rejected {len(result.done)} photo(s); "
+                                     f"{len(result.skipped)} skipped. Press u on a row to undo it.")
+        self.app.push_screen(ConfirmModal(
+            f"Move {photos_text(photos, labels)} to quarantine?\nNothing is erased; each can be undone."),
+            answer)
+
+    def _confirm_bulk_approve(self, findings: List[Dict[str, Any]]) -> None:
+        def answer(yes: Optional[bool]) -> None:
+            if yes:
+                result = self.review.approve_many(findings)
+                self._review_changed(f"Approved {len(result.done)} finding(s).")
+        self.app.push_screen(ConfirmModal(
+            f"Mark {len(findings)} LOW finding(s) as checked and fine?"), answer)
 
     # -- actions -----------------------------------------------------------
     def action_home(self) -> None:

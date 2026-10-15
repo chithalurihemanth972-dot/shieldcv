@@ -122,6 +122,7 @@ HELP_KEYS = [
     ("Running", "Esc cancel (asks first)"),
     ("Error", "r retry · b back · t show traceback"),
     ("Results", "f filter severity · o open file · s saved path · e export · Esc home"),
+    ("Review", "a approve · x reject (asks first, undoable) · u undo · b bulk review"),
 ]
 
 
