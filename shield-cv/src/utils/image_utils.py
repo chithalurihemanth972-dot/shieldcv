@@ -73,7 +73,9 @@ def list_images(directory: str | Path, recursive: bool = True,
             LOGGER.warning("list_images: not a directory: %s", root)
             return []
         iterator: Iterable[Path] = root.rglob("*") if recursive else root.glob("*")
-        files = sorted(p for p in iterator if p.is_file() and is_image_file(p))
+        # "_quarantine" holds photos a reviewer rejected: a rescan must not read them again.
+        files = sorted(p for p in iterator if p.is_file() and is_image_file(p)
+                       and "_quarantine" not in p.relative_to(root).parts)
         return files[:limit] if limit else files
     except Exception as exc:
         LOGGER.error("list_images failed for %s: %s", directory, exc)

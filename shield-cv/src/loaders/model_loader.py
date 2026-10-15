@@ -385,6 +385,38 @@ def _infer_input_shape(state_dict: Dict[str, np.ndarray]) -> Optional[Tuple[int,
         return None
 
 
+def _apply_model_card(model: LoadedModel, path: Path) -> LoadedModel:
+    """Apply an optional ``<model>.meta.json`` model card next to the weights.
+
+    Weights alone do not say what resolution a network expects; a guessed
+    224x224 (or a fixed probe size) can be wrong for a real deployment. A model
+    card may declare ``input_size`` (square side), ``channels``, ``classes``
+    (names, in output order) and ``num_classes``. Anything it does not state is
+    left as inferred. A malformed card is reported, never fatal.
+    """
+    card_path = path.with_name(path.stem + ".meta.json")
+    if not card_path.is_file():
+        return model
+    try:
+        import json
+        card = json.loads(card_path.read_text(encoding="utf-8"))
+        size = card.get("input_size")
+        if size:
+            channels = int(card.get("channels") or (model.input_shape[0] if model.input_shape else 3))
+            model.input_shape = (channels, int(size), int(size))
+            model.metadata["input_shape_source"] = "model_card"
+        classes = card.get("classes")
+        if isinstance(classes, list) and classes:
+            model.metadata["class_names"] = [str(c) for c in classes]
+            model.num_classes = model.num_classes or len(classes)
+        if card.get("num_classes"):
+            model.num_classes = int(card["num_classes"])
+        model.metadata["model_card"] = str(card_path)
+    except Exception as exc:
+        model.limitations.append(f"Model card {card_path.name} unreadable: {exc}")
+    return model
+
+
 def load_model(source: str | Path | Callable[[np.ndarray], Any],
                framework: Optional[str] = None) -> LoadedModel:
     """Open any supported model target and report its true access level.
@@ -416,9 +448,9 @@ def load_model(source: str | Path | Callable[[np.ndarray], Any],
 
         suffix = (framework or path.suffix.lower().lstrip(".")).lower()
         if suffix in ("pt", "pth", "bin", "pytorch"):
-            return _load_pytorch(path)
+            return _apply_model_card(_load_pytorch(path), path)
         if suffix == "onnx":
-            return _load_onnx(path)
+            return _apply_model_card(_load_onnx(path), path)
 
         model = LoadedModel(path=path, access_level=AccessLevel.UNAVAILABLE,
                             file_hash=_file_sha256(path))

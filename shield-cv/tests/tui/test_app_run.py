@@ -1,0 +1,264 @@
+"""Live stages, cancel with confirmation, error panel with retry/back."""
+from __future__ import annotations
+
+import dataclasses
+import threading
+import time
+from pathlib import Path
+
+from helpers import async_test, wait_for
+from src.tui.app import ShieldApp
+from src.tui.operations import OPERATIONS_BY_ID
+from src.tui.screens.run import RunScreen
+from src.tui.widgets.stage_progress import StageProgress
+
+RESULT = {"module": "data_scanner", "target": "x", "dataset": {"num_samples": 4},
+          "summary": {"verdict": "CLEAN", "risk_score": 0.1, "total_findings": 0},
+          "findings": []}
+
+
+def _app(tmp_path: Path) -> ShieldApp:
+    return ShieldApp(splash=False, discovery_roots=[tmp_path], reports_dir=tmp_path / "r")
+
+
+def _spec(runner):
+    return dataclasses.replace(OPERATIONS_BY_ID["scan"], runner=runner)
+
+
+@async_test
+async def test_stages_advance_and_results_open(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 1, 1)
+        progress("embedding", 5, 10)
+        gate.wait(5)
+        progress("trigger", 1, 1)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        stages = app.screen.query_one(StageProgress)
+        await wait_for(pilot, lambda: stages.state("embedding") == "running")
+        assert stages.state("loading") == "done"
+        assert stages.state("trigger") == "pending"
+        gate.set()
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ResultsScreen")
+        assert list((tmp_path / "r").glob("SHIELD-SCAN-*.json"))
+
+
+@async_test
+async def test_escape_asks_then_cancels(tmp_path):
+    stopped = []
+
+    def runner(params, progress):
+        try:
+            for i in range(400):
+                progress("embedding", i, 400)
+                time.sleep(0.01)
+        except BaseException:
+            stopped.append(True)
+            raise
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        run_screen = app.screen
+        await pilot.press("escape")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+        await pilot.press("y")
+        await wait_for(pilot, lambda: bool(stopped))
+        await wait_for(pilot, lambda: app.screen is not run_screen)
+        assert run_screen.status == "cancelled"
+        assert not list((tmp_path / "r").glob("*.json"))
+
+
+@async_test
+async def test_escape_then_no_keeps_running(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        await pilot.press("escape")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+        await pilot.press("n")
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        assert app.screen.status == "running"
+        gate.set()
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ResultsScreen")
+
+
+@async_test
+async def test_quit_during_run_asks_first(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        await pilot.press("q")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+        await pilot.press("n")
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        assert app.busy
+        gate.set()
+
+
+@async_test
+async def test_error_panel_retry_and_back(tmp_path):
+    calls = []
+
+    def runner(params, progress):
+        calls.append(1)
+        progress("loading", 0, 1)
+        raise RuntimeError("disk on fire")
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen)
+                       and app.screen.status == "failed")
+        screen = app.screen
+        assert "RuntimeError: disk on fire" in screen.error_text
+        assert screen.query_one(StageProgress).state("loading") == "failed"
+        await pilot.press("r")
+        await wait_for(pilot, lambda: len(calls) == 2 and screen.status == "failed")
+        await pilot.press("b")
+        await wait_for(pilot, lambda: app.screen is not screen)
+
+
+@async_test
+async def test_run_finishing_while_screen_tears_down_does_not_crash(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        screen = app.screen
+        await screen.query_one(StageProgress).remove()
+        gate.set()
+        await wait_for(pilot, lambda: not screen.busy or screen.status == "finished")
+        await pilot.pause(0.3)
+        assert app.return_code is None  # the app is still alive
+
+
+@async_test
+async def test_pending_stages_hide_their_bars_until_they_start(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("embedding", 1, 4)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        stages = app.screen.query_one(StageProgress)
+        await wait_for(pilot, lambda: stages.state("embedding") == "running")
+        assert not app.screen.query_one("#stage-embedding").has_class("-pending")
+        assert app.screen.query_one("#stage-trigger").has_class("-pending")
+        gate.set()
+
+
+def test_stage_eta_uses_time_spent_in_this_stage():
+    from src.tui.screens.run import stage_eta
+    # 10 of 573 done after 2 s *in this stage* -> ~113 s left, regardless of run length.
+    assert round(stage_eta(10, 573, 2.0)) == 113
+    assert stage_eta(0, 573, 2.0) is None
+    assert stage_eta(5, 1, 2.0) is None
+
+
+def test_quitting_does_not_wait_for_a_busy_engine(tmp_path):
+    import asyncio
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(25)  # a stage with no progress ticks (e.g. activation clustering)
+        return dict(RESULT)
+
+    async def scenario():
+        app = _app(tmp_path)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.start_run(_spec(runner), {"target": tmp_path})
+            await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+            await pilot.press("q")
+            await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+            await pilot.press("y")
+            await pilot.pause(0.2)
+
+    started = time.monotonic()
+    try:
+        asyncio.run(scenario())
+        assert time.monotonic() - started < 10
+    finally:
+        gate.set()
+
+
+@async_test
+async def test_run_finishing_under_an_open_dialog_waits_for_it(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        await pilot.press("escape")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ConfirmModal")
+        gate.set()
+        await pilot.pause(0.5)
+        assert type(app.screen).__name__ == "ConfirmModal"  # the question is not swallowed
+        await pilot.press("n")
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ResultsScreen")
+        assert not any(isinstance(s, RunScreen) for s in app.screen_stack)
+
+
+@async_test
+async def test_palette_and_go_home_respect_a_running_check(tmp_path):
+    gate = threading.Event()
+
+    def runner(params, progress):
+        progress("loading", 0, 1)
+        gate.wait(5)
+        return dict(RESULT)
+
+    app = _app(tmp_path)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.start_run(_spec(runner), {"target": tmp_path})
+        await wait_for(pilot, lambda: isinstance(app.screen, RunScreen))
+        assert app.check_action("command_palette", ()) is False
+        app.go_home()
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, RunScreen)
+        gate.set()
+        await wait_for(pilot, lambda: type(app.screen).__name__ == "ResultsScreen")
+        assert app.check_action("command_palette", ()) is not False

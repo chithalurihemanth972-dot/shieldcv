@@ -902,6 +902,31 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(audit)
     audit.set_defaults(func=cmd_audit)
 
+    # Inference provenance chain verification
+    verify = subparsers.add_parser("verify", help="verify inference provenance chain")
+    verify.add_argument("records", help="path to inference records JSON")
+    add_common(verify)
+    verify.set_defaults(func=cmd_verify)
+
+    # Distribution shift between two corpora
+    drift = subparsers.add_parser("drift", help="detect distribution shift between two corpora")
+    drift.add_argument("baseline", help="trusted baseline corpus directory")
+    drift.add_argument("current", help="current corpus directory to compare")
+    drift.add_argument("--max-images", type=int, default=None, help="cap images per corpus")
+    add_common(drift)
+    drift.set_defaults(func=cmd_drift)
+
+    # Multi-agent office scan
+    office = subparsers.add_parser("office", help="multi-agent parallel scan plus cross-contributor meeting")
+    office.add_argument("path", help="dataset root to scan")
+    office.add_argument("--workers", type=int, default=None, help="process pool workers")
+    office.add_argument("--contributors", nargs="*", default=None, help="subset of contributor names")
+    office.add_argument("--max-images", type=int, default=None, help="cap images per contributor")
+    office.add_argument("--serial", action="store_true", help="run agents sequentially")
+    office.add_argument("--models", nargs="*", default=None, help="candidate models for disagreement check")
+    add_common(office)
+    office.set_defaults(func=cmd_office)
+
     # Full system assurance report
     report = subparsers.add_parser("report", help="full assurance report across all modules")
     report.add_argument("target", nargs="?", default=None,

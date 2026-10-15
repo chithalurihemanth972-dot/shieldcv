@@ -529,6 +529,7 @@ class InferenceProvenanceEngine:
             "findings": [], "summary": {}, "chain": {}, "merkle": {},
             "signatures": {}, "replays": [], "limitations": list(self.warnings),
             "duration_seconds": 0.0,
+            "chain_valid": False, "first_break_index": None,
         }
 
         def report(stage: str, done: int, total: int) -> None:
@@ -558,6 +559,9 @@ class InferenceProvenanceEngine:
             # 1. chain integrity -------------------------------------------
             chain = self.verify_chain_integrity(payloads)
             result["chain"] = chain
+            result["chain_valid"] = bool(chain.get("valid", False))
+            break_idx = chain.get("first_break_index")
+            result["first_break_index"] = None if break_idx in (None, -1) else break_idx
             self._emit_chain_findings(chain, payloads)
             report("chain", 1, 4)
 

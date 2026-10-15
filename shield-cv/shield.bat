@@ -3,12 +3,13 @@
 :: Type 'shield <command>' from anywhere (after adding this folder to PATH)
 ::
 :: Commands:
-::   shield                -> open interactive mode (same as start)
-::   shield start          -> open interactive mode
+::   shield                -> open SHIELD Console (same as start)
+::   shield start          -> open SHIELD Console ( --no-splash skips the intro )
 ::   shield scan <path>    -> scan dataset / model / records
 ::   shield audit <path>   -> audit a model
 ::   shield verify <path>  -> verify provenance chain
 ::   shield drift <base> <cur> -> detect drift
+::   shield review <report>   -> approve / reject flagged photos (reject = undoable quarantine)
 ::   shield report [all]   -> full assurance report
 ::   shield demo           -> guided 8-stage demo
 ::   shield dashboard      -> open GUI dashboard
@@ -34,12 +35,13 @@ shift
 goto collect
 
 :run
-if /i "%CMD%"=="start"      ( python shield.py & goto :eof )
+if /i "%CMD%"=="start"      ( python shield.py %ARGS% & goto :eof )
 if /i "%CMD%"=="scan"       ( python run.py scan %ARGS% & goto :eof )
 if /i "%CMD%"=="agents"     ( python run.py office %ARGS% & goto :eof )
 if /i "%CMD%"=="audit"      ( python run.py audit %ARGS% & goto :eof )
 if /i "%CMD%"=="verify"     ( python run.py scan %ARGS% & goto :eof )
 if /i "%CMD%"=="drift"      ( python run.py drift %ARGS% & goto :eof )
+if /i "%CMD%"=="review"     ( python run.py review %ARGS% & goto :eof )
 if /i "%CMD%"=="report"     ( python run.py report %ARGS% & goto :eof )
 if /i "%CMD%"=="demo"       ( python demo\run_demo.py --quick %ARGS% & goto :eof )
 if /i "%CMD%"=="dashboard"  ( python -m streamlit run src\dashboard.py & goto :eof )
@@ -48,6 +50,7 @@ if /i "%CMD%"=="present"    ( python present.py %ARGS% & goto :eof )
 if /i "%CMD%"=="lab"        ( python demo\attack_lab.py %ARGS% & goto :eof )
 if /i "%CMD%"=="help"       ( goto :help )
 if /i "%CMD%"=="--help"     ( goto :help )
+if "%CMD:~0,2%"=="--"       ( python shield.py %CMD% %ARGS% & goto :eof )
 
 echo.
 echo  [ERROR] Unknown command: %CMD%
@@ -58,13 +61,14 @@ exit /b 1
 echo.
 echo  SHIELD-CV Commands:
 echo  -------------------
-echo  shield                 Open interactive mode
-echo  shield start           Open interactive mode
+echo  shield                 Open SHIELD Console (full-screen)
+echo  shield start           Open SHIELD Console ( --no-splash skips intro )
 echo  shield scan ^<path^>     Scan dataset / model / records
 echo  shield agents ^<root^>  One agent per contributor, in parallel
 echo  shield audit ^<model^>   Audit model for backdoors
 echo  shield verify ^<json^>   Verify provenance chain
 echo  shield drift ^<base^> ^<cur^>  Detect drift
+echo  shield review ^<report^>   Approve / reject flagged photos (undoable)
 echo  shield report [all]    Full assurance report
 echo  shield demo            Guided 8-stage demo
 echo  shield dashboard       Open GUI dashboard

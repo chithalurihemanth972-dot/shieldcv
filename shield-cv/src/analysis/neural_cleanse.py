@@ -151,6 +151,9 @@ class NeuralCleanse:
         reason: Explanation when unavailable.
     """
 
+    # Frame side length that ``l1_lambda`` is calibrated against.
+    L1_REFERENCE_SIDE = 32
+
     def __init__(self, model: Any,
                  epochs: int = 200,
                  lr: float = 0.1,
@@ -197,6 +200,7 @@ class NeuralCleanse:
         self.mode = "unavailable"
         self._torch = None
         self._module = None
+        self._device = "cpu"
 
         try:
             import torch
@@ -227,6 +231,50 @@ class NeuralCleanse:
         except Exception as exc:
             self.reason = f"Neural Cleanse init failed: {exc}"
             LOGGER.error(self.reason)
+
+    # -- device placement ---------------------------------------------------
+    def _use_accelerator(self) -> Optional[str]:
+        """Move the target module to a GPU for the scan when one is allowed.
+
+        Trigger optimisation is hundreds of forward/backward passes per class;
+        on a full-size CNN that is minutes on CPU and seconds on a GPU. The
+        module's weights are not changed, only where they live, and
+        :meth:`_restore_device` puts them back afterwards.
+
+        Returns:
+            The module's original device, or ``None`` if nothing was moved.
+        """
+        if self.mode != "gradient" or self._module is None:
+            return None
+        torch = self._torch
+        try:
+            from src.config import get_config
+            wanted = str(get_config().get("runtime.device", "cpu")).lower()
+        except Exception:
+            wanted = "cpu"
+        try:
+            original = str(next(self._module.parameters()).device)
+        except Exception:
+            original = "cpu"
+        self._device = original
+        if wanted in ("auto", "cuda") and torch.cuda.is_available() and original == "cpu":
+            try:
+                self._module.to("cuda")
+                self._device = "cuda"
+                return original
+            except Exception as exc:
+                LOGGER.warning("Neural Cleanse: GPU placement failed (%s); using CPU", exc)
+                self._device = original
+        return None
+
+    def _restore_device(self, original: Optional[str]) -> None:
+        if original is not None and self._module is not None:
+            try:
+                self._module.to(original)
+            except Exception as exc:
+                LOGGER.error("Neural Cleanse: could not restore module device: %s", exc)
+        if original is not None:
+            self._device = original
 
     # -- trigger optimisation ---------------------------------------------
     def optimize_trigger(self, target_class: int,
@@ -261,18 +309,26 @@ class NeuralCleanse:
         torch = self._torch
         candidate = TriggerCandidate(target_class=int(target_class))
         try:
-            inputs = torch.from_numpy(np.asarray(probe_images, dtype=np.float32))
+            device = self._device
+            inputs = torch.from_numpy(np.asarray(probe_images, dtype=np.float32)).to(device)
             _, channels, height, width = inputs.shape
 
-            mask_raw = torch.zeros((1, 1, height, width), requires_grad=True)
-            pattern_raw = torch.zeros((1, channels, height, width), requires_grad=True)
+            mask_raw = torch.zeros((1, 1, height, width), device=device, requires_grad=True)
+            pattern_raw = torch.zeros((1, channels, height, width), device=device,
+                                      requires_grad=True)
             with torch.no_grad():
                 mask_raw.normal_(-2.0, 0.1)     # sigmoid(-2) ≈ 0.12 → start small
                 pattern_raw.normal_(0.0, 0.1)
 
             optimizer = torch.optim.Adam([mask_raw, pattern_raw], lr=self.lr, betas=(0.5, 0.9))
+            # l1_lambda is calibrated for a 32x32 frame. The mask L1 grows with
+            # frame area, so at 128 px the same lambda is 16x stronger and the
+            # optimiser gives up before ANY class is reached, which wrecks the
+            # comparison. Scale it to keep the penalty per frame constant.
+            l1_weight = self.l1_lambda * (self.L1_REFERENCE_SIDE ** 2) / float(height * width)
             criterion = torch.nn.CrossEntropyLoss()
-            targets = torch.full((inputs.shape[0],), int(target_class), dtype=torch.long)
+            targets = torch.full((inputs.shape[0],), int(target_class), dtype=torch.long,
+                                 device=device)
 
             best_loss = float("inf")
             best_state: Optional[Tuple[np.ndarray, np.ndarray]] = None
@@ -289,7 +345,7 @@ class NeuralCleanse:
                     outputs = outputs[0]
                 classification_loss = criterion(outputs, targets)
                 l1 = torch.sum(torch.abs(mask))
-                loss = classification_loss + self.l1_lambda * l1
+                loss = classification_loss + l1_weight * l1
 
                 loss.backward()
                 optimizer.step()
@@ -318,8 +374,8 @@ class NeuralCleanse:
             candidate.final_loss = float(best_loss)
 
             with torch.no_grad():
-                mask_tensor = torch.from_numpy(candidate.mask).view(1, 1, height, width)
-                pattern_tensor = torch.from_numpy(candidate.pattern).unsqueeze(0)
+                mask_tensor = torch.from_numpy(candidate.mask).view(1, 1, height, width).to(device)
+                pattern_tensor = torch.from_numpy(candidate.pattern).unsqueeze(0).to(device)
                 stamped = (1.0 - mask_tensor) * inputs + mask_tensor * pattern_tensor
                 outputs = self._module(stamped)
                 if isinstance(outputs, (tuple, list)):
@@ -552,17 +608,22 @@ class NeuralCleanse:
                     f"(runtime cap). Backdoors targeting unscanned classes would be missed.")
 
             candidates: List[TriggerCandidate] = []
-            for position, class_id in enumerate(scanned):
-                candidate = self.optimize_trigger(class_id, probe_images)
-                candidates.append(candidate)
-                LOGGER.info("Neural Cleanse class %d: mask_l1=%.3f asr=%.3f (%d epochs)",
-                            class_id, candidate.mask_l1, candidate.attack_success_rate,
-                            candidate.epochs_run)
-                if progress_callback:
-                    try:
-                        progress_callback(position + 1, len(scanned))
-                    except Exception:
-                        pass
+            original_device = self._use_accelerator()
+            result["device"] = self._device
+            try:
+                for position, class_id in enumerate(scanned):
+                    candidate = self.optimize_trigger(class_id, probe_images)
+                    candidates.append(candidate)
+                    LOGGER.info("Neural Cleanse class %d: mask_l1=%.3f asr=%.3f (%d epochs)",
+                                class_id, candidate.mask_l1, candidate.attack_success_rate,
+                                candidate.epochs_run)
+                    if progress_callback:
+                        try:
+                            progress_callback(position + 1, len(scanned))
+                        except Exception:
+                            pass
+            finally:
+                self._restore_device(original_device)
 
             # A class the search FAILED to reach must not be recorded as having a
             # tiny trigger. The search reports the smallest patch it tried, so an
@@ -625,11 +686,17 @@ class NeuralCleanse:
                 # smaller than the other reachable classes need, is suspicious
                 # even when MAD cannot reach threshold.
                 ratio_hit = False
+                relative = float("nan")
                 if candidate.reachable and mad_underpowered:
                     coverage = candidate.effective_mask_l1 / max(frame_area, 1.0)
-                    relative = (candidate.effective_mask_l1 / reachable_median
-                                if np.isfinite(reachable_median) and reachable_median > 0
-                                else 1.0)
+                    # Compare against the OTHER reachable classes. Including
+                    # the candidate pulls the median towards it — with four
+                    # classes a 3x-smaller backdoor mask only reads as 0.37x.
+                    others = [c.effective_mask_l1 for c in candidates
+                              if c.reachable and c is not candidate]
+                    peer_median = float(np.median(others)) if others else float("nan")
+                    relative = (candidate.effective_mask_l1 / peer_median
+                                if np.isfinite(peer_median) and peer_median > 0 else 1.0)
                     ratio_hit = (coverage <= self.max_trigger_coverage
                                  and relative <= self.size_ratio_threshold
                                  and len(reachable_norms) >= 2)
@@ -643,6 +710,8 @@ class NeuralCleanse:
                         "reachable": True,
                         "median_mask_l1": round(float(median), 4),
                         "size_ratio": round(float(candidate.mask_l1) / max(median, 1e-9), 4),
+                        "peer_size_ratio": (round(float(relative), 4)
+                                            if np.isfinite(relative) else None),
                         "attack_success_rate": round(float(candidate.attack_success_rate), 4),
                         "detection_rule": ("MAD_ANOMALY_INDEX" if mad_hit
                                            else "SIZE_RATIO_HEURISTIC"),
@@ -701,7 +770,14 @@ def make_probe_batch(num_samples: int = 16, channels: int = 3, size: int = 32,
         if images:
             from src.utils.image_utils import normalize_imagenet, resize_image
             batch = []
-            for image in list(images)[:num_samples]:
+            pool = list(images)
+            if len(pool) > num_samples:
+                # Spread the probes over the whole reference set; reference
+                # folders are usually sorted by class, and probes drawn from
+                # one class bias every class's trigger search.
+                picks = np.linspace(0, len(pool) - 1, num_samples).round().astype(int)
+                pool = [pool[i] for i in picks]
+            for image in pool:
                 resized = resize_image(np.asarray(image), (size, size))
                 batch.append(normalize_imagenet(resized))
             if batch:
