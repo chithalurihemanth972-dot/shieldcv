@@ -20,7 +20,8 @@ IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp
 MODEL_EXTS = frozenset({".pt", ".pth", ".onnx"})
 RECORD_EXTS = frozenset({".json", ".jsonl"})
 SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv",
-                       "site-packages", ".mypy_cache", ".pytest_cache", "wheels"})
+                       "site-packages", ".mypy_cache", ".pytest_cache", "wheels",
+                       "_quarantine"})  # photos a reviewer rejected; never rescanned
 MAX_DIRS_VISITED = 4000
 MAX_LISTINGS = 3000        # every directory listing one discover() call may make
 MAX_CANDIDATES = 200
