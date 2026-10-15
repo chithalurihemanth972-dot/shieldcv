@@ -3,8 +3,8 @@
 :: Type 'shield <command>' from anywhere (after adding this folder to PATH)
 ::
 :: Commands:
-::   shield                -> open interactive mode (same as start)
-::   shield start          -> open interactive mode
+::   shield                -> open SHIELD Console (same as start)
+::   shield start          -> open SHIELD Console ( --no-splash skips the intro )
 ::   shield scan <path>    -> scan dataset / model / records
 ::   shield audit <path>   -> audit a model
 ::   shield verify <path>  -> verify provenance chain
@@ -34,7 +34,7 @@ shift
 goto collect
 
 :run
-if /i "%CMD%"=="start"      ( python shield.py & goto :eof )
+if /i "%CMD%"=="start"      ( python shield.py %ARGS% & goto :eof )
 if /i "%CMD%"=="scan"       ( python run.py scan %ARGS% & goto :eof )
 if /i "%CMD%"=="agents"     ( python run.py office %ARGS% & goto :eof )
 if /i "%CMD%"=="audit"      ( python run.py audit %ARGS% & goto :eof )
@@ -48,6 +48,7 @@ if /i "%CMD%"=="present"    ( python present.py %ARGS% & goto :eof )
 if /i "%CMD%"=="lab"        ( python demo\attack_lab.py %ARGS% & goto :eof )
 if /i "%CMD%"=="help"       ( goto :help )
 if /i "%CMD%"=="--help"     ( goto :help )
+if "%CMD:~0,2%"=="--"       ( python shield.py %CMD% %ARGS% & goto :eof )
 
 echo.
 echo  [ERROR] Unknown command: %CMD%
@@ -58,8 +59,8 @@ exit /b 1
 echo.
 echo  SHIELD-CV Commands:
 echo  -------------------
-echo  shield                 Open interactive mode
-echo  shield start           Open interactive mode
+echo  shield                 Open SHIELD Console (full-screen)
+echo  shield start           Open SHIELD Console ( --no-splash skips intro )
 echo  shield scan ^<path^>     Scan dataset / model / records
 echo  shield agents ^<root^>  One agent per contributor, in parallel
 echo  shield audit ^<model^>   Audit model for backdoors

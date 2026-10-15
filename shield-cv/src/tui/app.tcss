@@ -1,0 +1,87 @@
+Screen { background: $background; }
+
+/* -- home ---------------------------------------------------------------- */
+#home-header { height: 1; padding: 0 2; margin: 1 0; }
+#home-body { height: 1fr; padding: 0 1; }
+#tiles { grid-size: 3; grid-gutter: 1 2; grid-rows: auto; width: 3fr; height: auto; }
+.tile {
+    height: auto; min-height: 8; padding: 1 2; border: round $panel-lighten-2; background: $surface;
+}
+.tile:focus { border: heavy $primary; background: $panel; }
+.tile:hover { border: round $secondary; }
+#home-side { width: 2fr; min-width: 34; padding-left: 2; }
+.section-title { color: $text-muted; text-style: bold; margin: 1 0 0 0; }
+#recent { height: auto; max-height: 9; border: round $panel-lighten-2; background: $surface; }
+.launcher { width: 100%; margin-top: 1; }
+
+/* -- splash -------------------------------------------------------------- */
+#splash-line { margin-top: 2; }
+
+/* -- modals --------------------------------------------------------------- */
+ModalScreen { align: center middle; background: $background 70%; }
+.modal { width: 72; height: auto; padding: 1 2; border: thick $primary; background: $surface; }
+.modal-title { text-style: bold; color: $primary; margin-bottom: 1; }
+.modal-buttons { height: auto; align-horizontal: right; margin-top: 1; }
+.modal-buttons Button { margin-left: 2; }
+#browse { height: 80%; }
+#browse-tree { height: 1fr; border: round $panel-lighten-2; }
+#browse-hint { height: 1; margin-top: 1; }
+#too-small { width: 100%; height: 100%; content-align: center middle; text-align: center; }
+
+/* -- operation form -------------------------------------------------------- */
+#op-header { height: auto; padding: 1 2; }
+#op-form { padding: 0 2; }
+.field-label { margin-top: 1; text-style: bold; }
+TargetPicker { height: auto; }
+TargetPicker .picker-filter { display: none; margin-bottom: 0; }
+TargetPicker.-filtering .picker-filter { display: block; }
+TargetPicker OptionList { height: 10; border: round $panel-lighten-2; background: $surface; }
+TargetPicker.-compact OptionList { height: 6; }
+TargetPicker OptionList:focus { border: round $primary; }
+.picker-hint { height: auto; color: $text-muted; }
+.picker-hint.-error { color: $error; }
+#op-run-row { height: auto; margin: 1 0 2 0; }
+#op-run { min-width: 22; }
+#op-problem { color: $warning; padding-left: 2; height: 3; content-align-vertical: middle; }
+
+/* -- run ----------------------------------------------------------------- */
+#run-header { height: auto; padding: 1 2; }
+StageProgress { height: auto; padding: 0 2; }
+.stage-row { height: 1; }
+.stage-icon { width: 3; }
+.stage-label { width: 34; }
+.stage-row ProgressBar { width: 40; }
+.stage-row.-pending ProgressBar { visibility: hidden; }
+.stage-detail { width: 1fr; color: $text-muted; padding-left: 2; }
+#run-status { height: 1; padding: 0 2; margin-top: 1; color: $text-muted; }
+#run-log { height: 1fr; margin: 1 2; border: round $panel-lighten-2; background: $surface; }
+#run-error { display: none; height: auto; margin: 0 2; padding: 1 2; border: heavy $error; }
+RunScreen.-failed #run-error { display: block; }
+#run-trace { display: none; color: $text-muted; }
+RunScreen.-trace #run-trace { display: block; }
+
+/* -- results ------------------------------------------------------------- */
+#res-banner { height: 3; }
+#res-stats { height: 1; padding: 0 2; margin-top: 1; }
+#res-gauge { padding: 0 2; }
+#res-tabs { height: 1fr; margin-top: 1; }
+#findings-pane { height: 1fr; }
+FindingsTable { width: 3fr; height: 1fr; }
+FindingDetail { width: 2fr; min-width: 36; height: 1fr; padding: 0 1;
+                border-left: tall $panel-lighten-2; }
+ImagePreview { height: auto; }
+ImagePreview Horizontal { height: auto; }
+ImagePreview .preview-cell { width: 1fr; height: auto; }
+ImagePreview Image { width: auto; height: 12; }
+.breakdown-title { margin-top: 1; text-style: bold; color: $text-muted; }
+#res-immunity { height: auto; }
+#res-immunity Digits { width: auto; color: $primary; }
+
+/* -- agents -------------------------------------------------------------- */
+#agent-grid { grid-size: 3; grid-gutter: 1 2; height: auto; padding: 0 2; }
+.agent-card { height: 7; padding: 0 1; border: round $panel-lighten-2; background: $surface; }
+.agent-card.-finished { border: round $success; }
+.agent-card.-error { border: round $error; }
+#meeting-banner { margin-bottom: 1; }
+#meeting { height: auto; margin: 1 2; padding: 1 2; border: round $secondary; display: none; }
+AgentsScreen.-done #meeting { display: block; }
